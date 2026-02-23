@@ -221,26 +221,79 @@ async function paginateHubSpot(token, url, key, extra = {}) {
 }
 
 /**
- * Scan a single workflow object for HubSpot property name references.
- * Uses JSON stringification + regex — fast, handles any workflow shape.
- * Catches both formal property keys and personalization tokens like
- * {{contact.my_property}} used in note bodies, task descriptions, etc.
+ * Shared regex scan: extracts property internal names from a JSON-stringified object.
+ *
+ * Catches ANY JSON key whose name ends in "Property" or "PropertyName"
+ * (case-insensitive on the suffix), e.g.:
+ *   property, propertyName, filterProperty, targetProperty, sourceProperty,
+ *   fromPropertyName, toPropertyName, sourcePropertyName, targetPropertyName,
+ *   associatedProperty, actionPropertyName, …
+ *
+ * Value is constrained to look like a HubSpot internal name:
+ *   starts with a-z, followed by a-z / 0-9 / _ only.
+ * This avoids false-positives on things like "propertyType":"ENUMERATION".
  */
-function extractWorkflowProps(workflow) {
-  const str = JSON.stringify(workflow);
+function extractPropNamesFromJson(str) {
   const names = new Set();
-
-  // Matches: "propertyName":"foo"  "property":"foo"  "filterProperty":"foo"
-  const re = /"(?:propertyName|property|filterProperty)"\s*:\s*"([^"]+)"/g;
+  // Key: anything + "Property" optionally + "Name"  (both casings)
+  // Value: must look like a HubSpot internal property name (lowercase snake_case)
+  const re = /"[a-zA-Z]*[Pp]roperty(?:[Nn]ame)?"\s*:\s*"([a-z][a-z0-9_]*)"/g;
   let m;
   while ((m = re.exec(str)) !== null) names.add(m[1]);
-
-  // Matches personalization tokens like {{contact.my_property}} used in
-  // note bodies, task descriptions, email templates, etc.
-  const tokenRe = /\{\{[a-z_]+\.([a-z0-9_]+)\}\}/g;
-  while ((m = tokenRe.exec(str)) !== null) names.add(m[1]);
-
   return names;
+}
+
+/**
+ * Scan any HubSpot object for property references using two strategies:
+ *  1. JSON key scan   — catches "propertyName":"foo", "targetProperty":"foo", etc.
+ *  2. Token scan      — catches {{contact.foo}} personalization tokens in text fields
+ * Used by both workflow and email scanners.
+ */
+function extractPropsFromJsonWithTokens(obj) {
+  const str = JSON.stringify(obj);
+  const names = extractPropNamesFromJson(str);
+  const tokenRe = /\{\{[a-z_]+\.([a-z0-9_]+)\}\}/g;
+  let m;
+  while ((m = tokenRe.exec(str)) !== null) names.add(m[1]);
+  return names;
+}
+
+/**
+ * Scan a single workflow object for HubSpot property name references.
+ */
+function extractWorkflowProps(workflow) {
+  return extractPropsFromJsonWithTokens(workflow);
+}
+
+/**
+ * Scan a HubSpot marketing email object for property references.
+ * Catches {{contact.my_property}} tokens in subject, htmlBody, plainTextBody, etc.
+ */
+function extractEmailProps(email) {
+  return extractPropsFromJsonWithTokens(email);
+}
+
+/**
+ * Scan a HubSpot list object for referenced property names.
+ * List filter branches use "property":"propName" in their filter conditions.
+ */
+function extractListProps(list) {
+  return extractPropNamesFromJson(JSON.stringify(list));
+}
+
+/**
+ * Scan a HubSpot pipeline object for referenced property names.
+ * Catches any property references in stage metadata / required properties.
+ */
+function extractPipelineProps(pipeline) {
+  return extractPropNamesFromJson(JSON.stringify(pipeline));
+}
+
+/**
+ * Scan a HubSpot report object for referenced property names.
+ */
+function extractReportProps(report) {
+  return extractPropNamesFromJson(JSON.stringify(report));
 }
 
 /**
@@ -302,10 +355,9 @@ app.get('/api/list-properties', async (req, res) => {
 /**
  * POST /api/fetch-usage-context
  * Body: { token, objectType }
- * Fetches all workflows and all forms, then returns:
- *   - workflowProperties: string[]   (property names referenced in any workflow)
- *   - formProperties:     string[]   (property names used as form fields)
- * Errors on either source are non-fatal — returned as warning messages.
+ * Fetches workflows, forms, lists, pipelines, reports, and marketing emails, then
+ * returns property names referenced in each source.
+ * Errors on any source are non-fatal — returned as warning messages.
  */
 app.post('/api/fetch-usage-context', async (req, res) => {
   const { token } = req.body;
@@ -313,10 +365,11 @@ app.post('/api/fetch-usage-context', async (req, res) => {
 
   const warnings = [];
 
-  // propName -> { workflows: string[], forms: string[] }
+  // propName -> { workflows: string[], forms: string[], lists: string[], pipelines: string[], reports: string[] }
   const usageDetails = {};
   function addUsage(propName, type, sourceName) {
-    if (!usageDetails[propName]) usageDetails[propName] = { workflows: [], forms: [] };
+    if (!usageDetails[propName]) usageDetails[propName] = {};
+    if (!usageDetails[propName][type]) usageDetails[propName][type] = [];
     if (!usageDetails[propName][type].includes(sourceName)) {
       usageDetails[propName][type].push(sourceName);
     }
@@ -364,13 +417,112 @@ app.post('/api/fetch-usage-context', async (req, res) => {
     warnings.push(`Forms: ${err.response?.data?.message || err.message}`);
   }
 
+  // ── Lists (CRM v3 lists API) ──
+  let listProps = new Set();
+  let listCount = 0;
+  try {
+    const lists = await paginateHubSpot(
+      token,
+      'https://api.hubapi.com/crm/v3/lists',
+      'lists',
+      { includeFilters: true }
+    );
+    listCount = lists.length;
+    for (const list of lists) {
+      const listName = list.name || list.listId || 'Unnamed List';
+      for (const name of extractListProps(list)) {
+        listProps.add(name);
+        addUsage(name, 'lists', listName);
+      }
+    }
+  } catch (err) {
+    warnings.push(`Lists: ${err.response?.data?.message || err.message}`);
+  }
+
+  // ── Pipelines (CRM v3 — deals + tickets only) ──
+  let pipelineProps = new Set();
+  let pipelineCount = 0;
+  try {
+    for (const pipelineObj of ['deals', 'tickets']) {
+      const res = await axios.get(
+        `https://api.hubapi.com/crm/v3/pipelines/${pipelineObj}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const pipelines = res.data.results || [];
+      pipelineCount += pipelines.length;
+      for (const pipeline of pipelines) {
+        const pipelineName = pipeline.label || pipeline.id || 'Unnamed Pipeline';
+        for (const name of extractPipelineProps(pipeline)) {
+          pipelineProps.add(name);
+          addUsage(name, 'pipelines', pipelineName);
+        }
+      }
+    }
+  } catch (err) {
+    warnings.push(`Pipelines: ${err.response?.data?.message || err.message}`);
+  }
+
+  // ── Marketing emails (marketing v3 API) ──
+  // Catches {{contact.property}} personalization tokens in subject lines and body HTML.
+  let emailProps = new Set();
+  let emailCount = 0;
+  try {
+    const emails = await paginateHubSpot(
+      token,
+      'https://api.hubapi.com/marketing/v3/emails',
+      'results'
+    );
+    emailCount = emails.length;
+    for (const email of emails) {
+      const emailName = email.name || email.id || 'Unnamed Email';
+      for (const name of extractEmailProps(email)) {
+        emailProps.add(name);
+        addUsage(name, 'emails', emailName);
+      }
+    }
+  } catch (err) {
+    warnings.push(`Marketing emails: ${err.response?.data?.message || err.message}`);
+  }
+
+  // ── Reports (reporting v1 API) ──
+  let reportProps = new Set();
+  let reportCount = 0;
+  try {
+    const reportRes = await axios.get(
+      'https://api.hubapi.com/reporting/v1/reports',
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { limit: 300 },
+      }
+    );
+    const reports = reportRes.data.objects || reportRes.data.results || [];
+    reportCount = reports.length;
+    for (const report of reports) {
+      const reportName = report.name || report.id || 'Unnamed Report';
+      for (const name of extractReportProps(report)) {
+        reportProps.add(name);
+        addUsage(name, 'reports', reportName);
+      }
+    }
+  } catch (err) {
+    warnings.push(`Reports: ${err.response?.data?.message || err.message}`);
+  }
+
   res.json({
     success: true,
-    workflowProperties: Array.from(workflowProps),
-    formProperties: Array.from(formProps),
+    workflowProperties:  Array.from(workflowProps),
+    formProperties:      Array.from(formProps),
+    listProperties:      Array.from(listProps),
+    pipelineProperties:  Array.from(pipelineProps),
+    reportProperties:    Array.from(reportProps),
+    emailProperties:     Array.from(emailProps),
     propertyUsageDetails: usageDetails,
     workflowCount,
     formCount,
+    listCount,
+    pipelineCount,
+    reportCount,
+    emailCount,
     warnings,
   });
 });

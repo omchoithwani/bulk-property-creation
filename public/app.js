@@ -342,6 +342,7 @@ function onObjectTypeChange() {
   document.getElementById('filterBar').style.display       = 'none';
   document.getElementById('bulkBar').style.display         = 'none';
   document.getElementById('analyzeBtn').disabled           = true;
+  document.getElementById('exportBtn').disabled            = true;
   document.getElementById('analyzeProgress').style.display = 'none';
   document.getElementById('analyzeWarnings').style.display = 'none';
   document.getElementById('mgmtSubtitle').textContent      = 'Load properties to get started';
@@ -375,6 +376,7 @@ async function loadProperties() {
   document.getElementById('filterBar').style.display       = 'none';
   document.getElementById('bulkBar').style.display         = 'none';
   document.getElementById('analyzeBtn').disabled           = true;
+  document.getElementById('exportBtn').disabled            = true;
   document.getElementById('analyzeProgress').style.display = 'none';
   document.getElementById('analyzeWarnings').style.display = 'none';
 
@@ -393,10 +395,15 @@ async function loadProperties() {
       _recordCount:  null,  // null = not checked yet
       _inWorkflow:   null,
       _inForm:       null,
+      _inList:       null,
+      _inPipeline:   null,
+      _inReport:     null,
+      _inEmail:      null,
     }));
 
     renderPropertiesTable(visibleProperties());
     document.getElementById('analyzeBtn').disabled    = false;
+    document.getElementById('exportBtn').disabled     = false;
     document.getElementById('filterBar').style.display = 'flex';
 
     const custom = allProperties.filter((p) => !p.hubspotDefined).length;
@@ -473,6 +480,11 @@ function buildPropertyRow(prop) {
     <td class="col-usage" id="usage-records-${esc(prop.name)}">${usageCellHtml(prop._recordCount, 'records')}</td>
     <td class="col-usage" id="usage-workflow-${esc(prop.name)}">${usageCellHtml(prop._inWorkflow, 'workflow', prop.name)}</td>
     <td class="col-usage" id="usage-form-${esc(prop.name)}">${usageCellHtml(prop._inForm, 'form', prop.name)}</td>
+    <td class="col-usage" id="usage-list-${esc(prop.name)}">${usageCellHtml(prop._inList, 'list', prop.name)}</td>
+    <td class="col-usage" id="usage-pipeline-${esc(prop.name)}">${usageCellHtml(prop._inPipeline, 'pipeline', prop.name)}</td>
+    <td class="col-usage" id="usage-report-${esc(prop.name)}">${usageCellHtml(prop._inReport, 'report', prop.name)}</td>
+    <td class="col-usage" id="usage-email-${esc(prop.name)}">${usageCellHtml(prop._inEmail, 'email', prop.name)}</td>
+    <td class="col-date">${formatDate(prop.updatedAt)}</td>
     <td class="col-actions">
       <button
         class="btn-icon"
@@ -495,11 +507,11 @@ function usageCellHtml(value, kind, propName) {
     const n = Number(value);
     return `<span class="usage-count ${n > 0 ? 'has-values' : 'no-values'}">${n > 0 ? n.toLocaleString() : '0'}</span>`;
   }
-  // bool (workflow / form) — clickable when in use
+  // bool (workflow / form / list / pipeline / report) — clickable when in use
   if (value === true) {
-    if (propName && (kind === 'workflow' || kind === 'form')) {
-      const type = kind === 'workflow' ? 'workflows' : 'forms';
-      return `<button class="usage-check-btn" title="Click to see where" onclick="showUsageDetails('${esc(propName)}', '${type}')">✓</button>`;
+    const typeMap = { workflow: 'workflows', form: 'forms', list: 'lists', pipeline: 'pipelines', report: 'reports', email: 'emails' };
+    if (propName && typeMap[kind]) {
+      return `<button class="usage-check-btn" title="Click to see where" onclick="showUsageDetails('${esc(propName)}', '${typeMap[kind]}')">✓</button>`;
     }
     return '<span class="usage-check" title="Used">✓</span>';
   }
@@ -515,9 +527,13 @@ function updateUsageCell(propName, kind, value) {
     if (kind === 'records')  prop._recordCount = value;
     if (kind === 'workflow') prop._inWorkflow  = value;
     if (kind === 'form')     prop._inForm      = value;
+    if (kind === 'list')     prop._inList      = value;
+    if (kind === 'pipeline') prop._inPipeline  = value;
+    if (kind === 'report')   prop._inReport    = value;
+    if (kind === 'email')    prop._inEmail     = value;
   }
   const cell = document.getElementById(`usage-${kind}-${propName}`);
-  if (cell) cell.innerHTML = usageCellHtml(value, kind === 'records' ? 'records' : kind, propName);
+  if (cell) cell.innerHTML = usageCellHtml(value, kind, propName);
 }
 
 /** Type badge from HubSpot fieldType */
@@ -561,13 +577,21 @@ function visibleProperties() {
       const noRecords  = p._recordCount === null || Number(p._recordCount) === 0;
       const noWorkflow = p._inWorkflow  === false || p._inWorkflow  === null;
       const noForm     = p._inForm      === false || p._inForm      === null;
-      return !p.hubspotDefined && noRecords && noWorkflow && noForm;
+      const noList     = p._inList      === false || p._inList      === null;
+      const noPipeline = p._inPipeline  === false || p._inPipeline  === null;
+      const noReport   = p._inReport    === false || p._inReport    === null;
+      const noEmail    = p._inEmail     === false || p._inEmail     === null;
+      return !p.hubspotDefined && noRecords && noWorkflow && noForm && noList && noPipeline && noReport && noEmail;
     }
     if (filterUsage === 'used') {
       const hasRecords  = Number(p._recordCount) > 0;
       const inWorkflow  = p._inWorkflow === true;
       const inForm      = p._inForm     === true;
-      return hasRecords || inWorkflow || inForm;
+      const inList      = p._inList     === true;
+      const inPipeline  = p._inPipeline === true;
+      const inReport    = p._inReport   === true;
+      const inEmail     = p._inEmail    === true;
+      return hasRecords || inWorkflow || inForm || inList || inPipeline || inReport || inEmail;
     }
     return true;
   });
@@ -628,17 +652,28 @@ async function analyzeUsage() {
       `</ul>`;
   }
 
-  const wfSet   = new Set(ctx.workflowProperties || []);
-  const formSet = new Set(ctx.formProperties     || []);
-  usageContext  = { wfSet, formSet, usageDetails: ctx.propertyUsageDetails || {} };
+  const wfSet       = new Set(ctx.workflowProperties  || []);
+  const formSet     = new Set(ctx.formProperties       || []);
+  const listSet     = new Set(ctx.listProperties       || []);
+  const pipelineSet = new Set(ctx.pipelineProperties   || []);
+  const reportSet   = new Set(ctx.reportProperties     || []);
+  const emailSet    = new Set(ctx.emailProperties      || []);
+  usageContext  = { wfSet, formSet, listSet, pipelineSet, reportSet, emailSet, usageDetails: ctx.propertyUsageDetails || {} };
 
-  textEl.textContent = `Found ${ctx.workflowCount} workflows, ${ctx.formCount} forms. Updating table…`;
+  textEl.textContent =
+    `Found ${ctx.workflowCount} workflows, ${ctx.formCount} forms, ` +
+    `${ctx.listCount} lists, ${ctx.pipelineCount} pipelines, ${ctx.reportCount} reports, ` +
+    `${ctx.emailCount} emails. Checking records…`;
   fillEl.style.width = '10%';
 
-  // ── Step 2: update workflow + form columns (in-memory, instant) ──
+  // ── Step 2: update all non-record columns (in-memory, instant) ──
   for (const prop of allProperties) {
-    updateUsageCell(prop.name, 'workflow', wfSet.has(prop.name));
-    updateUsageCell(prop.name, 'form',     formSet.has(prop.name));
+    updateUsageCell(prop.name, 'workflow',  wfSet.has(prop.name));
+    updateUsageCell(prop.name, 'form',      formSet.has(prop.name));
+    updateUsageCell(prop.name, 'list',      listSet.has(prop.name));
+    updateUsageCell(prop.name, 'pipeline',  pipelineSet.has(prop.name));
+    updateUsageCell(prop.name, 'report',    reportSet.has(prop.name));
+    updateUsageCell(prop.name, 'email',     emailSet.has(prop.name));
   }
 
   // ── Step 3: check record counts for custom properties ──
@@ -686,7 +721,11 @@ async function analyzeUsage() {
     !p.hubspotDefined &&
     Number(p._recordCount) === 0 &&
     p._inWorkflow === false &&
-    p._inForm     === false
+    p._inForm     === false &&
+    p._inList     === false &&
+    p._inPipeline === false &&
+    p._inReport   === false &&
+    p._inEmail    === false
   ).length;
 
   textEl.textContent =
@@ -752,7 +791,11 @@ function selectUnused() {
     const noRecords  = prop._recordCount === null || Number(prop._recordCount) === 0;
     const noWorkflow = prop._inWorkflow  !== true;
     const noForm     = prop._inForm      !== true;
-    const isUnused   = noRecords && noWorkflow && noForm;
+    const noList     = prop._inList      !== true;
+    const noPipeline = prop._inPipeline  !== true;
+    const noReport   = prop._inReport    !== true;
+    const noEmail    = prop._inEmail     !== true;
+    const isUnused   = noRecords && noWorkflow && noForm && noList && noPipeline && noReport && noEmail;
     const cb = document.querySelector(`.prop-cb[data-name="${CSS.escape(prop.name)}"]`);
     if (cb && isUnused) { cb.checked = true; count++; }
   }
@@ -868,7 +911,8 @@ function showUsageDetails(propName, type) {
   const details = usageContext?.usageDetails?.[propName]?.[type] || [];
   const prop = allProperties.find((p) => p.name === propName);
   const label = prop?.label || propName;
-  const typeLabel = type === 'workflows' ? 'Workflows' : 'Forms';
+  const typeLabels = { workflows: 'Workflows', forms: 'Forms', lists: 'Lists', pipelines: 'Pipelines', reports: 'Reports', emails: 'Marketing Emails' };
+  const typeLabel = typeLabels[type] || type;
 
   document.getElementById('usageDetailTitle').textContent =
     `"${label}" — Used in ${typeLabel}`;
@@ -888,4 +932,55 @@ function showUsageDetails(propName, type) {
 function closeUsageDetailModal(e) {
   if (e && e.target !== document.getElementById('usageDetailModal')) return;
   document.getElementById('usageDetailModal').style.display = 'none';
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// HELPERS
+// ════════════════════════════════════════════════════════════════════════════
+
+function formatDate(dateStr) {
+  if (!dateStr) return '—';
+  try {
+    return new Date(dateStr).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  } catch {
+    return '—';
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// EXPORT CSV
+// ════════════════════════════════════════════════════════════════════════════
+
+function exportCSV() {
+  const vis = visibleProperties();
+  const objectType = document.getElementById('objectType').value;
+
+  const headers = [
+    'Label', 'Internal Name', 'Type', 'Group', 'Source',
+    'Records', 'In Workflow', 'In Form', 'In List', 'In Pipeline', 'In Report', 'In Email',
+    'Last Modified',
+  ];
+
+  const boolCell = (v) => v === true ? 'Yes' : v === false ? 'No' : '';
+
+  const rows = vis.map((p) => [
+    p.label || p.name,
+    p.name,
+    p.fieldType || '',
+    p.groupName || '',
+    p.hubspotDefined ? 'System' : 'Custom',
+    p._recordCount !== null && p._recordCount !== 'loading' && p._recordCount !== 'error'
+      ? p._recordCount
+      : '',
+    boolCell(p._inWorkflow),
+    boolCell(p._inForm),
+    boolCell(p._inList),
+    boolCell(p._inPipeline),
+    boolCell(p._inReport),
+    boolCell(p._inEmail),
+    p.updatedAt ? new Date(p.updatedAt).toISOString().slice(0, 10) : '',
+  ]);
+
+  const csv = [headers, ...rows].map((r) => r.map(escapeCSV).join(',')).join('\r\n');
+  downloadBlob(csv, `${objectType}-properties.csv`, 'text/csv');
 }
