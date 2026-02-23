@@ -398,6 +398,7 @@ async function loadProperties() {
       _inList:       null,
       _inPipeline:   null,
       _inReport:     null,
+      _inEmail:      null,
     }));
 
     renderPropertiesTable(visibleProperties());
@@ -482,6 +483,7 @@ function buildPropertyRow(prop) {
     <td class="col-usage" id="usage-list-${esc(prop.name)}">${usageCellHtml(prop._inList, 'list', prop.name)}</td>
     <td class="col-usage" id="usage-pipeline-${esc(prop.name)}">${usageCellHtml(prop._inPipeline, 'pipeline', prop.name)}</td>
     <td class="col-usage" id="usage-report-${esc(prop.name)}">${usageCellHtml(prop._inReport, 'report', prop.name)}</td>
+    <td class="col-usage" id="usage-email-${esc(prop.name)}">${usageCellHtml(prop._inEmail, 'email', prop.name)}</td>
     <td class="col-date">${formatDate(prop.updatedAt)}</td>
     <td class="col-actions">
       <button
@@ -507,7 +509,7 @@ function usageCellHtml(value, kind, propName) {
   }
   // bool (workflow / form / list / pipeline / report) — clickable when in use
   if (value === true) {
-    const typeMap = { workflow: 'workflows', form: 'forms', list: 'lists', pipeline: 'pipelines', report: 'reports' };
+    const typeMap = { workflow: 'workflows', form: 'forms', list: 'lists', pipeline: 'pipelines', report: 'reports', email: 'emails' };
     if (propName && typeMap[kind]) {
       return `<button class="usage-check-btn" title="Click to see where" onclick="showUsageDetails('${esc(propName)}', '${typeMap[kind]}')">✓</button>`;
     }
@@ -528,6 +530,7 @@ function updateUsageCell(propName, kind, value) {
     if (kind === 'list')     prop._inList      = value;
     if (kind === 'pipeline') prop._inPipeline  = value;
     if (kind === 'report')   prop._inReport    = value;
+    if (kind === 'email')    prop._inEmail     = value;
   }
   const cell = document.getElementById(`usage-${kind}-${propName}`);
   if (cell) cell.innerHTML = usageCellHtml(value, kind, propName);
@@ -577,7 +580,8 @@ function visibleProperties() {
       const noList     = p._inList      === false || p._inList      === null;
       const noPipeline = p._inPipeline  === false || p._inPipeline  === null;
       const noReport   = p._inReport    === false || p._inReport    === null;
-      return !p.hubspotDefined && noRecords && noWorkflow && noForm && noList && noPipeline && noReport;
+      const noEmail    = p._inEmail     === false || p._inEmail     === null;
+      return !p.hubspotDefined && noRecords && noWorkflow && noForm && noList && noPipeline && noReport && noEmail;
     }
     if (filterUsage === 'used') {
       const hasRecords  = Number(p._recordCount) > 0;
@@ -586,7 +590,8 @@ function visibleProperties() {
       const inList      = p._inList     === true;
       const inPipeline  = p._inPipeline === true;
       const inReport    = p._inReport   === true;
-      return hasRecords || inWorkflow || inForm || inList || inPipeline || inReport;
+      const inEmail     = p._inEmail    === true;
+      return hasRecords || inWorkflow || inForm || inList || inPipeline || inReport || inEmail;
     }
     return true;
   });
@@ -652,11 +657,13 @@ async function analyzeUsage() {
   const listSet     = new Set(ctx.listProperties       || []);
   const pipelineSet = new Set(ctx.pipelineProperties   || []);
   const reportSet   = new Set(ctx.reportProperties     || []);
-  usageContext  = { wfSet, formSet, listSet, pipelineSet, reportSet, usageDetails: ctx.propertyUsageDetails || {} };
+  const emailSet    = new Set(ctx.emailProperties      || []);
+  usageContext  = { wfSet, formSet, listSet, pipelineSet, reportSet, emailSet, usageDetails: ctx.propertyUsageDetails || {} };
 
   textEl.textContent =
     `Found ${ctx.workflowCount} workflows, ${ctx.formCount} forms, ` +
-    `${ctx.listCount} lists, ${ctx.pipelineCount} pipelines, ${ctx.reportCount} reports. Checking records…`;
+    `${ctx.listCount} lists, ${ctx.pipelineCount} pipelines, ${ctx.reportCount} reports, ` +
+    `${ctx.emailCount} emails. Checking records…`;
   fillEl.style.width = '10%';
 
   // ── Step 2: update all non-record columns (in-memory, instant) ──
@@ -666,6 +673,7 @@ async function analyzeUsage() {
     updateUsageCell(prop.name, 'list',      listSet.has(prop.name));
     updateUsageCell(prop.name, 'pipeline',  pipelineSet.has(prop.name));
     updateUsageCell(prop.name, 'report',    reportSet.has(prop.name));
+    updateUsageCell(prop.name, 'email',     emailSet.has(prop.name));
   }
 
   // ── Step 3: check record counts for custom properties ──
@@ -716,7 +724,8 @@ async function analyzeUsage() {
     p._inForm     === false &&
     p._inList     === false &&
     p._inPipeline === false &&
-    p._inReport   === false
+    p._inReport   === false &&
+    p._inEmail    === false
   ).length;
 
   textEl.textContent =
@@ -785,7 +794,8 @@ function selectUnused() {
     const noList     = prop._inList      !== true;
     const noPipeline = prop._inPipeline  !== true;
     const noReport   = prop._inReport    !== true;
-    const isUnused   = noRecords && noWorkflow && noForm && noList && noPipeline && noReport;
+    const noEmail    = prop._inEmail     !== true;
+    const isUnused   = noRecords && noWorkflow && noForm && noList && noPipeline && noReport && noEmail;
     const cb = document.querySelector(`.prop-cb[data-name="${CSS.escape(prop.name)}"]`);
     if (cb && isUnused) { cb.checked = true; count++; }
   }
@@ -901,7 +911,7 @@ function showUsageDetails(propName, type) {
   const details = usageContext?.usageDetails?.[propName]?.[type] || [];
   const prop = allProperties.find((p) => p.name === propName);
   const label = prop?.label || propName;
-  const typeLabels = { workflows: 'Workflows', forms: 'Forms', lists: 'Lists', pipelines: 'Pipelines', reports: 'Reports' };
+  const typeLabels = { workflows: 'Workflows', forms: 'Forms', lists: 'Lists', pipelines: 'Pipelines', reports: 'Reports', emails: 'Marketing Emails' };
   const typeLabel = typeLabels[type] || type;
 
   document.getElementById('usageDetailTitle').textContent =
@@ -947,7 +957,7 @@ function exportCSV() {
 
   const headers = [
     'Label', 'Internal Name', 'Type', 'Group', 'Source',
-    'Records', 'In Workflow', 'In Form', 'In List', 'In Pipeline', 'In Report',
+    'Records', 'In Workflow', 'In Form', 'In List', 'In Pipeline', 'In Report', 'In Email',
     'Last Modified',
   ];
 
@@ -967,6 +977,7 @@ function exportCSV() {
     boolCell(p._inList),
     boolCell(p._inPipeline),
     boolCell(p._inReport),
+    boolCell(p._inEmail),
     p.updatedAt ? new Date(p.updatedAt).toISOString().slice(0, 10) : '',
   ]);
 

@@ -244,22 +244,33 @@ function extractPropNamesFromJson(str) {
 }
 
 /**
- * Scan a single workflow object for HubSpot property name references.
- * Uses JSON stringification + regex — fast, handles any workflow shape.
- * Catches both formal property keys and personalization tokens like
- * {{contact.my_property}} used in note bodies, task descriptions, etc.
+ * Scan any HubSpot object for property references using two strategies:
+ *  1. JSON key scan   — catches "propertyName":"foo", "targetProperty":"foo", etc.
+ *  2. Token scan      — catches {{contact.foo}} personalization tokens in text fields
+ * Used by both workflow and email scanners.
  */
-function extractWorkflowProps(workflow) {
-  const str = JSON.stringify(workflow);
+function extractPropsFromJsonWithTokens(obj) {
+  const str = JSON.stringify(obj);
   const names = extractPropNamesFromJson(str);
-
-  // Matches personalization tokens like {{contact.my_property}} used in
-  // note bodies, task descriptions, email templates, etc.
   const tokenRe = /\{\{[a-z_]+\.([a-z0-9_]+)\}\}/g;
   let m;
   while ((m = tokenRe.exec(str)) !== null) names.add(m[1]);
-
   return names;
+}
+
+/**
+ * Scan a single workflow object for HubSpot property name references.
+ */
+function extractWorkflowProps(workflow) {
+  return extractPropsFromJsonWithTokens(workflow);
+}
+
+/**
+ * Scan a HubSpot marketing email object for property references.
+ * Catches {{contact.my_property}} tokens in subject, htmlBody, plainTextBody, etc.
+ */
+function extractEmailProps(email) {
+  return extractPropsFromJsonWithTokens(email);
 }
 
 /**
@@ -344,10 +355,9 @@ app.get('/api/list-properties', async (req, res) => {
 /**
  * POST /api/fetch-usage-context
  * Body: { token, objectType }
- * Fetches all workflows and all forms, then returns:
- *   - workflowProperties: string[]   (property names referenced in any workflow)
- *   - formProperties:     string[]   (property names used as form fields)
- * Errors on either source are non-fatal — returned as warning messages.
+ * Fetches workflows, forms, lists, pipelines, reports, and marketing emails, then
+ * returns property names referenced in each source.
+ * Errors on any source are non-fatal — returned as warning messages.
  */
 app.post('/api/fetch-usage-context', async (req, res) => {
   const { token } = req.body;
@@ -452,6 +462,28 @@ app.post('/api/fetch-usage-context', async (req, res) => {
     warnings.push(`Pipelines: ${err.response?.data?.message || err.message}`);
   }
 
+  // ── Marketing emails (marketing v3 API) ──
+  // Catches {{contact.property}} personalization tokens in subject lines and body HTML.
+  let emailProps = new Set();
+  let emailCount = 0;
+  try {
+    const emails = await paginateHubSpot(
+      token,
+      'https://api.hubapi.com/marketing/v3/emails',
+      'results'
+    );
+    emailCount = emails.length;
+    for (const email of emails) {
+      const emailName = email.name || email.id || 'Unnamed Email';
+      for (const name of extractEmailProps(email)) {
+        emailProps.add(name);
+        addUsage(name, 'emails', emailName);
+      }
+    }
+  } catch (err) {
+    warnings.push(`Marketing emails: ${err.response?.data?.message || err.message}`);
+  }
+
   // ── Reports (reporting v1 API) ──
   let reportProps = new Set();
   let reportCount = 0;
@@ -483,12 +515,14 @@ app.post('/api/fetch-usage-context', async (req, res) => {
     listProperties:      Array.from(listProps),
     pipelineProperties:  Array.from(pipelineProps),
     reportProperties:    Array.from(reportProps),
+    emailProperties:     Array.from(emailProps),
     propertyUsageDetails: usageDetails,
     workflowCount,
     formCount,
     listCount,
     pipelineCount,
     reportCount,
+    emailCount,
     warnings,
   });
 });
