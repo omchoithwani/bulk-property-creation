@@ -304,6 +304,15 @@ app.post('/api/fetch-usage-context', async (req, res) => {
 
   const warnings = [];
 
+  // propName -> { workflows: string[], forms: string[] }
+  const usageDetails = {};
+  function addUsage(propName, type, sourceName) {
+    if (!usageDetails[propName]) usageDetails[propName] = { workflows: [], forms: [] };
+    if (!usageDetails[propName][type].includes(sourceName)) {
+      usageDetails[propName][type].push(sourceName);
+    }
+  }
+
   // ── Workflows (v3 automation API) ──
   let workflowProps = new Set();
   let workflowCount = 0;
@@ -315,7 +324,11 @@ app.post('/api/fetch-usage-context', async (req, res) => {
     );
     workflowCount = workflows.length;
     for (const wf of workflows) {
-      for (const name of extractWorkflowProps(wf)) workflowProps.add(name);
+      const wfName = wf.name || `Workflow ${wf.id || ''}`.trim();
+      for (const name of extractWorkflowProps(wf)) {
+        workflowProps.add(name);
+        addUsage(name, 'workflows', wfName);
+      }
     }
   } catch (err) {
     warnings.push(`Workflows: ${err.response?.data?.message || err.message}`);
@@ -332,7 +345,11 @@ app.post('/api/fetch-usage-context', async (req, res) => {
     );
     formCount = forms.length;
     for (const f of forms) {
-      for (const name of extractFormProps(f)) formProps.add(name);
+      const formName = f.name || f.id || 'Unnamed Form';
+      for (const name of extractFormProps(f)) {
+        formProps.add(name);
+        addUsage(name, 'forms', formName);
+      }
     }
   } catch (err) {
     warnings.push(`Forms: ${err.response?.data?.message || err.message}`);
@@ -342,6 +359,7 @@ app.post('/api/fetch-usage-context', async (req, res) => {
     success: true,
     workflowProperties: Array.from(workflowProps),
     formProperties: Array.from(formProps),
+    propertyUsageDetails: usageDetails,
     workflowCount,
     formCount,
     warnings,
