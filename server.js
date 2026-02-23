@@ -239,16 +239,25 @@ function extractWorkflowProps(workflow) {
  */
 function extractFormProps(form) {
   const names = new Set();
-  // v3 forms
-  for (const group of form.fieldGroups || []) {
-    for (const field of group.fields || []) {
+
+  // Recursively scan a list of fields, including any dependent/conditional fields.
+  function scanFields(fields) {
+    for (const field of (fields || [])) {
       if (field.name) names.add(field.name);
+      // v3 forms can nest conditional fields under each field's dependentFields array
+      for (const dep of (field.dependentFields || [])) {
+        scanFields(dep.fields);
+      }
     }
   }
-  // legacy v2 forms
-  for (const field of form.formFields || []) {
-    if (field.name) names.add(field.name);
+
+  // v3 forms
+  for (const group of (form.fieldGroups || [])) {
+    scanFields(group.fields);
   }
+  // legacy v2 forms
+  scanFields(form.formFields);
+
   return names;
 }
 
