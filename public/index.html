@@ -344,6 +344,17 @@
     </div>
   </div>
 
+  <!-- ── Usage detail modal ──────────────────────────────── -->
+  <div id="usageDetailModal" class="modal-backdrop" style="display:none" onclick="closeUsageDetailModal(event)">
+    <div class="modal modal-usage">
+      <h2 class="modal-title" id="usageDetailTitle">Property Usage</h2>
+      <ul id="usageDetailList" class="usage-detail-list"></ul>
+      <div class="modal-actions">
+        <button class="btn btn-outline" onclick="closeUsageDetailModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
   <script src="app.js"></script>
 </body>
 </html>

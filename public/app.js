@@ -471,8 +471,8 @@ function buildPropertyRow(prop) {
       <span class="badge ${isSystem ? 'badge-system' : 'badge-custom'}">${isSystem ? 'System' : 'Custom'}</span>
     </td>
     <td class="col-usage" id="usage-records-${esc(prop.name)}">${usageCellHtml(prop._recordCount, 'records')}</td>
-    <td class="col-usage" id="usage-workflow-${esc(prop.name)}">${usageCellHtml(prop._inWorkflow, 'bool')}</td>
-    <td class="col-usage" id="usage-form-${esc(prop.name)}">${usageCellHtml(prop._inForm, 'bool')}</td>
+    <td class="col-usage" id="usage-workflow-${esc(prop.name)}">${usageCellHtml(prop._inWorkflow, 'workflow', prop.name)}</td>
+    <td class="col-usage" id="usage-form-${esc(prop.name)}">${usageCellHtml(prop._inForm, 'form', prop.name)}</td>
     <td class="col-actions">
       <button
         class="btn-icon"
@@ -487,7 +487,7 @@ function buildPropertyRow(prop) {
 }
 
 /** Render the content of a usage cell. */
-function usageCellHtml(value, kind) {
+function usageCellHtml(value, kind, propName) {
   if (value === null) return '<span class="usage-none">—</span>';
   if (kind === 'records') {
     if (value === 'loading') return '<span class="usage-spinner">⏳</span>';
@@ -495,8 +495,14 @@ function usageCellHtml(value, kind) {
     const n = Number(value);
     return `<span class="usage-count ${n > 0 ? 'has-values' : 'no-values'}">${n > 0 ? n.toLocaleString() : '0'}</span>`;
   }
-  // bool (workflow / form)
-  if (value === true)  return '<span class="usage-check" title="Used">✓</span>';
+  // bool (workflow / form) — clickable when in use
+  if (value === true) {
+    if (propName && (kind === 'workflow' || kind === 'form')) {
+      const type = kind === 'workflow' ? 'workflows' : 'forms';
+      return `<button class="usage-check-btn" title="Click to see where" onclick="showUsageDetails('${esc(propName)}', '${type}')">✓</button>`;
+    }
+    return '<span class="usage-check" title="Used">✓</span>';
+  }
   if (value === false) return '<span class="usage-cross" title="Not found">✕</span>';
   return '<span class="usage-none">—</span>';
 }
@@ -511,7 +517,7 @@ function updateUsageCell(propName, kind, value) {
     if (kind === 'form')     prop._inForm      = value;
   }
   const cell = document.getElementById(`usage-${kind}-${propName}`);
-  if (cell) cell.innerHTML = usageCellHtml(value, kind === 'records' ? 'records' : 'bool');
+  if (cell) cell.innerHTML = usageCellHtml(value, kind === 'records' ? 'records' : kind, propName);
 }
 
 /** Type badge from HubSpot fieldType */
@@ -624,7 +630,7 @@ async function analyzeUsage() {
 
   const wfSet   = new Set(ctx.workflowProperties || []);
   const formSet = new Set(ctx.formProperties     || []);
-  usageContext  = { wfSet, formSet };
+  usageContext  = { wfSet, formSet, usageDetails: ctx.propertyUsageDetails || {} };
 
   textEl.textContent = `Found ${ctx.workflowCount} workflows, ${ctx.formCount} forms. Updating table…`;
   fillEl.style.width = '10%';
@@ -852,4 +858,34 @@ async function confirmDelete() {
 
   clearSelection();
   filterProperties();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// USAGE DETAIL MODAL
+// ════════════════════════════════════════════════════════════════════════════
+
+function showUsageDetails(propName, type) {
+  const details = usageContext?.usageDetails?.[propName]?.[type] || [];
+  const prop = allProperties.find((p) => p.name === propName);
+  const label = prop?.label || propName;
+  const typeLabel = type === 'workflows' ? 'Workflows' : 'Forms';
+
+  document.getElementById('usageDetailTitle').textContent =
+    `"${label}" — Used in ${typeLabel}`;
+
+  const list = document.getElementById('usageDetailList');
+  if (details.length === 0) {
+    list.innerHTML = '<li class="usage-detail-none">No names available</li>';
+  } else {
+    list.innerHTML = details
+      .map((name) => `<li>${esc(name)}</li>`)
+      .join('');
+  }
+
+  document.getElementById('usageDetailModal').style.display = 'flex';
+}
+
+function closeUsageDetailModal(e) {
+  if (e && e.target !== document.getElementById('usageDetailModal')) return;
+  document.getElementById('usageDetailModal').style.display = 'none';
 }

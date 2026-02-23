@@ -868,3 +868,52 @@ tr.row-deleted td { opacity: 0.35; text-decoration: line-through; }
   font-family: 'SFMono-Regular', Consolas, monospace;
   color: var(--text-muted);
 }
+
+/* ── Clickable usage check button ──────────────────────────────────── */
+.usage-check-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--green);
+  font-size: 16px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  line-height: 1;
+  transition: background 0.15s, color 0.15s;
+}
+.usage-check-btn:hover {
+  background: var(--green-light);
+  color: #005e55;
+}
+
+/* ── Usage detail modal ─────────────────────────────────────────────── */
+.modal-usage {
+  max-width: 520px;
+}
+
+.usage-detail-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 24px;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+}
+
+.usage-detail-list li {
+  padding: 9px 14px;
+  font-size: 13px;
+  color: var(--text);
+  border-bottom: 1px solid var(--border-light);
+}
+
+.usage-detail-list li:last-child {
+  border-bottom: none;
+}
+
+.usage-detail-none {
+  color: var(--text-muted);
+  font-style: italic;
+}
