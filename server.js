@@ -221,12 +221,23 @@ async function paginateHubSpot(token, url, key, extra = {}) {
 }
 
 /**
- * Shared regex scan: extracts property name values from a JSON-stringified object.
- * Matches "propertyName":"foo", "property":"foo", "filterProperty":"foo".
+ * Shared regex scan: extracts property internal names from a JSON-stringified object.
+ *
+ * Catches ANY JSON key whose name ends in "Property" or "PropertyName"
+ * (case-insensitive on the suffix), e.g.:
+ *   property, propertyName, filterProperty, targetProperty, sourceProperty,
+ *   fromPropertyName, toPropertyName, sourcePropertyName, targetPropertyName,
+ *   associatedProperty, actionPropertyName, …
+ *
+ * Value is constrained to look like a HubSpot internal name:
+ *   starts with a-z, followed by a-z / 0-9 / _ only.
+ * This avoids false-positives on things like "propertyType":"ENUMERATION".
  */
 function extractPropNamesFromJson(str) {
   const names = new Set();
-  const re = /"(?:propertyName|property|filterProperty)"\s*:\s*"([^"]+)"/g;
+  // Key: anything + "Property" optionally + "Name"  (both casings)
+  // Value: must look like a HubSpot internal property name (lowercase snake_case)
+  const re = /"[a-zA-Z]*[Pp]roperty(?:[Nn]ame)?"\s*:\s*"([a-z][a-z0-9_]*)"/g;
   let m;
   while ((m = re.exec(str)) !== null) names.add(m[1]);
   return names;
@@ -271,13 +282,7 @@ function extractPipelineProps(pipeline) {
  * Scan a HubSpot report object for referenced property names.
  */
 function extractReportProps(report) {
-  const str = JSON.stringify(report);
-  const names = extractPropNamesFromJson(str);
-  // Reports also reference properties in dimension/column keys
-  const colRe = /"(?:column|dimension|metric|propertyName)"\s*:\s*"([^"]+)"/g;
-  let m;
-  while ((m = colRe.exec(str)) !== null) names.add(m[1]);
-  return names;
+  return extractPropNamesFromJson(JSON.stringify(report));
 }
 
 /**
