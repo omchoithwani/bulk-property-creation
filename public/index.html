@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HubSpot Bulk Property Creator</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- ── Header ─────────────────────────────────────────── -->
+  <header class="app-header">
+    <div class="header-inner">
+      <div class="header-brand">
+        <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="14" cy="14" r="14" fill="#FF7A59"/>
+          <path d="M9 8h2.5v5h7V8H21v12h-2.5v-5h-7v5H9V8Z" fill="white"/>
+        </svg>
+        <span class="brand-name">Bulk Property Creator</span>
+        <span class="hs-badge">HubSpot</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ── Main ───────────────────────────────────────────── -->
+  <main class="app-main">
+
+    <!-- ── Shared: Configuration ─────────────────────────── -->
+    <div class="card" id="card-config">
+      <div class="card-header">
+        <div class="step-label">
+          <span class="step-dot">1</span>
+          <div>
+            <h2>Configuration</h2>
+            <p>Connect your HubSpot account and choose an object type</p>
+          </div>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="form-grid">
+          <div class="form-group">
+            <label for="token">Private App Token <span class="req">*</span></label>
+            <div class="input-wrap">
+              <input
+                type="password"
+                id="token"
+                placeholder="pat-na1-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                autocomplete="off"
+              />
+              <button class="eye-btn" onclick="toggleToken()" title="Show / hide token" aria-label="Toggle token visibility">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </div>
+            <p class="hint">
+              HubSpot → Settings → Integrations → Private Apps.<br/>
+              Scopes needed: <code>crm.schemas.*.write</code> · <code>automation</code> · <code>forms</code>
+            </p>
+          </div>
+          <div class="form-group">
+            <label for="objectType">Object Type <span class="req">*</span></label>
+            <select id="objectType" onchange="onObjectTypeChange()">
+              <option value="contacts">Contacts</option>
+              <option value="companies">Companies</option>
+              <option value="deals">Deals</option>
+              <option value="tickets">Tickets</option>
+              <option value="products">Products</option>
+            </select>
+            <p class="hint">Properties will be created or managed under this object type.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Tab navigation ────────────────────────────────── -->
+    <div class="tab-nav">
+      <button class="tab-btn active" id="tab-create" onclick="switchTab('create')">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Create Properties
+      </button>
+      <button class="tab-btn" id="tab-manage" onclick="switchTab('manage')">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+        Manage Properties
+      </button>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════
+         CREATE PANEL
+    ══════════════════════════════════════════════════════ -->
+    <div id="panel-create">
+
+      <!-- Step 2: Upload CSV -->
+      <div class="card" id="card-upload">
+        <div class="card-header">
+          <div class="step-label">
+            <span class="step-dot">2</span>
+            <div>
+              <h2>Upload CSV</h2>
+              <p>Upload a file with one property per row</p>
+            </div>
+          </div>
+          <button class="btn btn-outline btn-sm" onclick="downloadTemplate()">
+            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Download Template
+          </button>
+        </div>
+        <div class="card-body">
+
+          <!-- CSV format guide -->
+          <div class="format-guide">
+            <p class="format-title">CSV Columns</p>
+            <div class="format-cols">
+              <div class="format-col required-col">
+                <span class="col-name">Name</span>
+                <span class="col-req-tag">Required</span>
+                <span class="col-desc">Display label for the property</span>
+              </div>
+              <div class="format-col required-col">
+                <span class="col-name">Type</span>
+                <span class="col-req-tag">Required</span>
+                <span class="col-desc">Drop-down Select · Radio Select · Multiple Checkboxes</span>
+              </div>
+              <div class="format-col optional-col">
+                <span class="col-name">Description</span>
+                <span class="col-opt-tag">Optional</span>
+                <span class="col-desc">Help text shown in HubSpot</span>
+              </div>
+              <div class="format-col optional-col">
+                <span class="col-name">Options</span>
+                <span class="col-opt-tag">Optional</span>
+                <span class="col-desc">Semicolon-separated values — e.g. <em>Red;Green;Blue</em></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Drop zone -->
+          <div
+            class="dropzone"
+            id="dropzone"
+            ondragover="handleDragOver(event)"
+            ondragleave="handleDragLeave(event)"
+            ondrop="handleDrop(event)"
+            onclick="document.getElementById('fileInput').click()"
+          >
+            <div class="dz-inner">
+              <svg class="dz-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+              <p class="dz-primary">Drag &amp; drop your CSV here</p>
+              <p class="dz-secondary">or click to browse files</p>
+            </div>
+          </div>
+          <input type="file" id="fileInput" accept=".csv" style="display:none" onchange="handleFileSelect(event)" />
+
+          <!-- CSV errors -->
+          <div id="csvErrors" class="error-box" style="display:none"></div>
+
+          <!-- Preview -->
+          <div id="csvPreview" style="display:none">
+            <div class="preview-header">
+              <h3 id="previewCount"></h3>
+              <button class="btn btn-outline btn-sm" onclick="clearFile()">Clear</button>
+            </div>
+            <div class="table-wrap">
+              <table id="previewTable">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Name</th>
+                    <th>Type</th>
+                    <th>Description</th>
+                    <th>Options</th>
+                  </tr>
+                </thead>
+                <tbody id="previewBody"></tbody>
+              </table>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Step 3: Create -->
+      <div class="card" id="card-create">
+        <div class="card-body">
+
+          <button class="btn btn-primary btn-lg" id="createBtn" onclick="createProperties()" disabled>
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Create Properties in HubSpot
+          </button>
+
+          <!-- Progress -->
+          <div id="progressSection" style="display:none">
+            <div class="progress-track">
+              <div class="progress-fill" id="progressFill" style="width:0%"></div>
+            </div>
+            <p class="progress-text" id="progressText">Starting…</p>
+          </div>
+
+          <!-- Results -->
+          <div id="resultsSection" style="display:none">
+            <div class="results-summary" id="resultsSummary"></div>
+            <div class="table-wrap">
+              <table id="resultsTable">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Name</th>
+                    <th>Type</th>
+                    <th>Internal Name</th>
+                    <th>Status</th>
+                    <th>Details</th>
+                  </tr>
+                </thead>
+                <tbody id="resultsBody"></tbody>
+              </table>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+    </div><!-- /panel-create -->
+
+
+    <!-- ══════════════════════════════════════════════════════
+         MANAGE PANEL
+    ══════════════════════════════════════════════════════ -->
+    <div id="panel-manage" style="display:none">
+
+      <!-- Toolbar card -->
+      <div class="card">
+        <div class="card-header">
+          <div class="step-label">
+            <span class="step-dot">2</span>
+            <div>
+              <h2>Properties</h2>
+              <p id="mgmtSubtitle">Load properties to get started</p>
+            </div>
+          </div>
+          <div class="toolbar-actions">
+            <button class="btn btn-outline btn-sm" id="loadPropsBtn" onclick="loadProperties()">
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.55"/></svg>
+              Load Properties
+            </button>
+            <button class="btn btn-outline btn-sm" id="analyzeBtn" onclick="analyzeUsage()" disabled>
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              Analyze Usage
+            </button>
+          </div>
+        </div>
+
+        <!-- Analyze progress (hidden until analyzing) -->
+        <div id="analyzeProgress" style="display:none" class="analyze-progress">
+          <div class="progress-track">
+            <div class="progress-fill" id="analyzeProgressFill" style="width:0%"></div>
+          </div>
+          <p class="progress-text" id="analyzeProgressText">Starting analysis…</p>
+        </div>
+
+        <!-- Analyze warnings -->
+        <div id="analyzeWarnings" style="display:none" class="warn-box"></div>
+
+        <!-- Filter / search bar -->
+        <div id="filterBar" style="display:none" class="filter-bar">
+          <div class="search-wrap">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" id="searchProps" placeholder="Search by name…" oninput="filterProperties()" />
+          </div>
+          <select id="filterSource" onchange="filterProperties()">
+            <option value="all">All Properties</option>
+            <option value="custom">Custom Only</option>
+            <option value="system">System Only</option>
+          </select>
+          <select id="filterUsage" onchange="filterProperties()">
+            <option value="all">Any Usage</option>
+            <option value="unused">Unused Only</option>
+            <option value="used">In Use Only</option>
+          </select>
+          <span class="filter-count" id="filterCount"></span>
+        </div>
+      </div>
+
+      <!-- Bulk-action bar (shown when rows are selected) -->
+      <div id="bulkBar" class="bulk-bar" style="display:none">
+        <span id="bulkCount" class="bulk-count"></span>
+        <div class="bulk-actions">
+          <button class="btn btn-outline btn-sm" onclick="selectUnused()">
+            Select Unused
+          </button>
+          <button class="btn btn-outline btn-sm" onclick="clearSelection()">
+            Clear Selection
+          </button>
+          <button class="btn btn-danger btn-sm" id="deleteSelectedBtn" onclick="deleteSelected()">
+            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+            Delete Selected
+          </button>
+        </div>
+      </div>
+
+      <!-- Properties table card -->
+      <div class="card" id="propsTableCard" style="display:none">
+        <div class="table-wrap">
+          <table id="propsTable">
+            <thead>
+              <tr>
+                <th class="col-cb">
+                  <input type="checkbox" id="selectAllCb" onchange="toggleSelectAll()" title="Select all visible custom properties" />
+                </th>
+                <th>Name</th>
+                <th>Type</th>
+                <th>Group</th>
+                <th class="col-source">Source</th>
+                <th class="col-usage">Records</th>
+                <th class="col-usage">Workflows</th>
+                <th class="col-usage">Forms</th>
+                <th class="col-actions">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="propsBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Empty state -->
+      <div id="propsEmpty" class="empty-state" style="display:none">
+        <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="empty-icon"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        <p>No properties match your filters.</p>
+      </div>
+
+    </div><!-- /panel-manage -->
+
+  </main>
+
+  <!-- ── Delete confirmation modal ──────────────────────── -->
+  <div id="deleteModal" class="modal-backdrop" style="display:none" onclick="closeDeleteModal(event)">
+    <div class="modal">
+      <h2 class="modal-title">Delete Properties</h2>
+      <p class="modal-body" id="deleteModalBody"></p>
+      <div class="modal-actions">
+        <button class="btn btn-outline" onclick="closeDeleteModal()">Cancel</button>
+        <button class="btn btn-danger" id="deleteConfirmBtn" onclick="confirmDelete()">
+          <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+          Yes, Delete
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
