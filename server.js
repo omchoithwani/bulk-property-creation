@@ -223,14 +223,23 @@ async function paginateHubSpot(token, url, key, extra = {}) {
 /**
  * Scan a single workflow object for HubSpot property name references.
  * Uses JSON stringification + regex — fast, handles any workflow shape.
+ * Catches both formal property keys and personalization tokens like
+ * {{contact.my_property}} used in note bodies, task descriptions, etc.
  */
 function extractWorkflowProps(workflow) {
   const str = JSON.stringify(workflow);
   const names = new Set();
+
   // Matches: "propertyName":"foo"  "property":"foo"  "filterProperty":"foo"
   const re = /"(?:propertyName|property|filterProperty)"\s*:\s*"([^"]+)"/g;
   let m;
   while ((m = re.exec(str)) !== null) names.add(m[1]);
+
+  // Matches personalization tokens like {{contact.my_property}} used in
+  // note bodies, task descriptions, email templates, etc.
+  const tokenRe = /\{\{[a-z_]+\.([a-z0-9_]+)\}\}/g;
+  while ((m = tokenRe.exec(str)) !== null) names.add(m[1]);
+
   return names;
 }
 
