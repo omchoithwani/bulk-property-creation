@@ -1,0 +1,19 @@
+{
+  "name": "hubspot-bulk-property-creator",
+  "version": "1.0.0",
+  "description": "Bulk create HubSpot properties from a CSV file",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.0",
+    "csv-parse": "^5.5.6",
+    "express": "^4.19.0",
+    "multer": "^1.4.5-lts.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}
