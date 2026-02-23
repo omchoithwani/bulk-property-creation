@@ -196,6 +196,198 @@ app.post('/api/create-property', async (req, res) => {
   }
 });
 
+// ── Manage-properties helpers ───────────────────────────────────────────────
+
+/**
+ * Follow HubSpot cursor pagination, collecting every item.
+ * @param {string} token  Bearer token
+ * @param {string} url    API URL (no query string)
+ * @param {string} key    Key in the response body that holds the array
+ * @param {object} extra  Extra query params
+ */
+async function paginateHubSpot(token, url, key, extra = {}) {
+  const items = [];
+  let after = null;
+  do {
+    const res = await axios.get(url, {
+      headers: { Authorization: `Bearer ${token}` },
+      params: { limit: 100, ...extra, ...(after ? { after } : {}) },
+    });
+    const batch = res.data[key];
+    if (Array.isArray(batch)) items.push(...batch);
+    after = res.data.paging?.next?.after ?? null;
+  } while (after);
+  return items;
+}
+
+/**
+ * Scan a single workflow object for HubSpot property name references.
+ * Uses JSON stringification + regex — fast, handles any workflow shape.
+ */
+function extractWorkflowProps(workflow) {
+  const str = JSON.stringify(workflow);
+  const names = new Set();
+  // Matches: "propertyName":"foo"  "property":"foo"  "filterProperty":"foo"
+  const re = /"(?:propertyName|property|filterProperty)"\s*:\s*"([^"]+)"/g;
+  let m;
+  while ((m = re.exec(str)) !== null) names.add(m[1]);
+  return names;
+}
+
+/**
+ * Scan a HubSpot form object (v3 or legacy) for referenced property names.
+ */
+function extractFormProps(form) {
+  const names = new Set();
+  // v3 forms
+  for (const group of form.fieldGroups || []) {
+    for (const field of group.fields || []) {
+      if (field.name) names.add(field.name);
+    }
+  }
+  // legacy v2 forms
+  for (const field of form.formFields || []) {
+    if (field.name) names.add(field.name);
+  }
+  return names;
+}
+
+// ── Manage-properties routes ────────────────────────────────────────────────
+
+/**
+ * GET /api/list-properties?token=&objectType=
+ * Returns all non-archived properties for the given object type.
+ */
+app.get('/api/list-properties', async (req, res) => {
+  const { token, objectType } = req.query;
+  if (!token || !objectType) {
+    return res.status(400).json({ success: false, error: 'token and objectType are required.' });
+  }
+  try {
+    // Properties API returns everything in one page (no cursor pagination)
+    const response = await axios.get(
+      `https://api.hubapi.com/crm/v3/properties/${objectType}`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { archived: false },
+      }
+    );
+    const properties = (response.data.results || [])
+      .sort((a, b) => (a.label || a.name).localeCompare(b.label || b.name));
+    res.json({ success: true, properties, count: properties.length });
+  } catch (err) {
+    const msg = err.response?.data?.message || err.message;
+    res.status(err.response?.status || 500).json({ success: false, error: msg });
+  }
+});
+
+/**
+ * POST /api/fetch-usage-context
+ * Body: { token, objectType }
+ * Fetches all workflows and all forms, then returns:
+ *   - workflowProperties: string[]   (property names referenced in any workflow)
+ *   - formProperties:     string[]   (property names used as form fields)
+ * Errors on either source are non-fatal — returned as warning messages.
+ */
+app.post('/api/fetch-usage-context', async (req, res) => {
+  const { token } = req.body;
+  if (!token) return res.status(400).json({ success: false, error: 'token is required.' });
+
+  const warnings = [];
+
+  // ── Workflows (v3 automation API) ──
+  let workflowProps = new Set();
+  let workflowCount = 0;
+  try {
+    const workflows = await paginateHubSpot(
+      token,
+      'https://api.hubapi.com/automation/v3/workflows',
+      'workflows'
+    );
+    workflowCount = workflows.length;
+    for (const wf of workflows) {
+      for (const name of extractWorkflowProps(wf)) workflowProps.add(name);
+    }
+  } catch (err) {
+    warnings.push(`Workflows: ${err.response?.data?.message || err.message}`);
+  }
+
+  // ── Forms (marketing v3 API) ──
+  let formProps = new Set();
+  let formCount = 0;
+  try {
+    const forms = await paginateHubSpot(
+      token,
+      'https://api.hubapi.com/marketing/v3/forms',
+      'results'
+    );
+    formCount = forms.length;
+    for (const f of forms) {
+      for (const name of extractFormProps(f)) formProps.add(name);
+    }
+  } catch (err) {
+    warnings.push(`Forms: ${err.response?.data?.message || err.message}`);
+  }
+
+  res.json({
+    success: true,
+    workflowProperties: Array.from(workflowProps),
+    formProperties: Array.from(formProps),
+    workflowCount,
+    formCount,
+    warnings,
+  });
+});
+
+/**
+ * POST /api/check-property-records
+ * Body: { token, objectType, propertyName }
+ * Uses the CRM search API to count how many records have this property set.
+ */
+app.post('/api/check-property-records', async (req, res) => {
+  const { token, objectType, propertyName } = req.body;
+  if (!token || !objectType || !propertyName) {
+    return res.status(400).json({ success: false, error: 'token, objectType, propertyName are required.' });
+  }
+  try {
+    const response = await axios.post(
+      `https://api.hubapi.com/crm/v3/objects/${objectType}/search`,
+      {
+        filterGroups: [{ filters: [{ propertyName, operator: 'HAS_PROPERTY' }] }],
+        limit: 1,
+        properties: [],
+      },
+      { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
+    );
+    res.json({ success: true, total: response.data.total ?? 0 });
+  } catch (err) {
+    const msg = err.response?.data?.message || err.message;
+    res.status(err.response?.status || 500).json({ success: false, error: msg });
+  }
+});
+
+/**
+ * DELETE /api/delete-property
+ * Body: { token, objectType, propertyName }
+ * Permanently deletes a custom HubSpot property. System properties will fail.
+ */
+app.delete('/api/delete-property', async (req, res) => {
+  const { token, objectType, propertyName } = req.body;
+  if (!token || !objectType || !propertyName) {
+    return res.status(400).json({ success: false, error: 'token, objectType, propertyName are required.' });
+  }
+  try {
+    await axios.delete(
+      `https://api.hubapi.com/crm/v3/properties/${objectType}/${propertyName}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    res.json({ success: true });
+  } catch (err) {
+    const msg = err.response?.data?.message || err.message;
+    res.status(err.response?.status || 500).json({ success: false, error: msg });
+  }
+});
+
 // ── Error handler ──────────────────────────────────────────────────────────
 
 // eslint-disable-next-line no-unused-vars

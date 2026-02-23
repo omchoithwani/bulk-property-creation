@@ -2,6 +2,12 @@
 let parsedRows = [];    // parsed CSV rows
 let isCreating = false; // lock to prevent double-submit
 
+// Manage panel state
+let allProperties    = [];    // raw property objects from HubSpot
+let usageContext     = null;  // { workflowSet: Set, formSet: Set }
+let analysisStarted  = false;
+let pendingDelete    = [];    // property names queued for deletion
+
 /* ── Token field toggle ────────────────────────────────────────────── */
 function toggleToken() {
   const input = document.getElementById('token');
@@ -313,4 +319,537 @@ function esc(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// TAB NAVIGATION
+// ════════════════════════════════════════════════════════════════════════════
+
+function switchTab(tab) {
+  document.getElementById('panel-create').style.display = tab === 'create' ? '' : 'none';
+  document.getElementById('panel-manage').style.display = tab === 'manage' ? '' : 'none';
+  document.getElementById('tab-create').classList.toggle('active', tab === 'create');
+  document.getElementById('tab-manage').classList.toggle('active', tab === 'manage');
+}
+
+/** Called when object type changes — reset the manage panel state. */
+function onObjectTypeChange() {
+  allProperties   = [];
+  usageContext    = null;
+  analysisStarted = false;
+  document.getElementById('propsTableCard').style.display  = 'none';
+  document.getElementById('propsEmpty').style.display      = 'none';
+  document.getElementById('filterBar').style.display       = 'none';
+  document.getElementById('bulkBar').style.display         = 'none';
+  document.getElementById('analyzeBtn').disabled           = true;
+  document.getElementById('analyzeProgress').style.display = 'none';
+  document.getElementById('analyzeWarnings').style.display = 'none';
+  document.getElementById('mgmtSubtitle').textContent      = 'Load properties to get started';
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// MANAGE — LOAD PROPERTIES
+// ════════════════════════════════════════════════════════════════════════════
+
+async function loadProperties() {
+  const token      = document.getElementById('token').value.trim();
+  const objectType = document.getElementById('objectType').value;
+
+  if (!token) {
+    alert('Please enter your HubSpot Private App Token first.');
+    document.getElementById('token').focus();
+    return;
+  }
+
+  // Reset state
+  allProperties   = [];
+  usageContext    = null;
+  analysisStarted = false;
+
+  const btn = document.getElementById('loadPropsBtn');
+  btn.disabled     = true;
+  btn.textContent  = 'Loading…';
+
+  document.getElementById('propsTableCard').style.display  = 'none';
+  document.getElementById('propsEmpty').style.display      = 'none';
+  document.getElementById('filterBar').style.display       = 'none';
+  document.getElementById('bulkBar').style.display         = 'none';
+  document.getElementById('analyzeBtn').disabled           = true;
+  document.getElementById('analyzeProgress').style.display = 'none';
+  document.getElementById('analyzeWarnings').style.display = 'none';
+
+  try {
+    const res  = await fetch(`/api/list-properties?token=${encodeURIComponent(token)}&objectType=${encodeURIComponent(objectType)}`);
+    const data = await res.json();
+
+    if (!data.success) {
+      alert(`Failed to load properties: ${data.error}`);
+      return;
+    }
+
+    // Annotate each property with analysis placeholders
+    allProperties = data.properties.map((p) => ({
+      ...p,
+      _recordCount:  null,  // null = not checked yet
+      _inWorkflow:   null,
+      _inForm:       null,
+    }));
+
+    renderPropertiesTable(visibleProperties());
+    document.getElementById('analyzeBtn').disabled    = false;
+    document.getElementById('filterBar').style.display = 'flex';
+
+    const custom = allProperties.filter((p) => !p.hubspotDefined).length;
+    document.getElementById('mgmtSubtitle').textContent =
+      `${data.count} properties loaded (${custom} custom)`;
+    document.getElementById('filterCount').textContent =
+      `${data.count} shown`;
+  } catch (err) {
+    alert(`Network error: ${err.message}`);
+  } finally {
+    btn.disabled    = false;
+    btn.innerHTML   = `
+      <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.55"/></svg>
+      Load Properties`;
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// MANAGE — RENDER TABLE
+// ════════════════════════════════════════════════════════════════════════════
+
+function renderPropertiesTable(props) {
+  const card  = document.getElementById('propsTableCard');
+  const empty = document.getElementById('propsEmpty');
+  const tbody = document.getElementById('propsBody');
+
+  tbody.innerHTML = '';
+
+  if (props.length === 0) {
+    card.style.display  = 'none';
+    empty.style.display = 'block';
+    return;
+  }
+
+  card.style.display  = 'block';
+  empty.style.display = 'none';
+
+  for (const prop of props) {
+    tbody.appendChild(buildPropertyRow(prop));
+  }
+
+  updateSelectAllState();
+  updateBulkBar();
+}
+
+function buildPropertyRow(prop) {
+  const isSystem  = prop.hubspotDefined;
+  const canDelete = !isSystem;
+
+  const tr = document.createElement('tr');
+  tr.id            = `prop-row-${prop.name}`;
+  tr.dataset.name  = prop.name;
+  tr.dataset.system = isSystem ? '1' : '0';
+
+  tr.innerHTML = `
+    <td class="col-cb">
+      <input
+        type="checkbox"
+        class="prop-cb"
+        data-name="${esc(prop.name)}"
+        ${isSystem ? 'disabled title="System properties cannot be deleted"' : ''}
+        onchange="onRowCheckChange()"
+      />
+    </td>
+    <td>
+      <span class="prop-label">${esc(prop.label || prop.name)}</span>
+      <span class="prop-internal">${esc(prop.name)}</span>
+    </td>
+    <td>${propTypeBadge(prop.fieldType)}</td>
+    <td class="muted">${esc(prop.groupName || '—')}</td>
+    <td class="col-source">
+      <span class="badge ${isSystem ? 'badge-system' : 'badge-custom'}">${isSystem ? 'System' : 'Custom'}</span>
+    </td>
+    <td class="col-usage" id="usage-records-${esc(prop.name)}">${usageCellHtml(prop._recordCount, 'records')}</td>
+    <td class="col-usage" id="usage-workflow-${esc(prop.name)}">${usageCellHtml(prop._inWorkflow, 'bool')}</td>
+    <td class="col-usage" id="usage-form-${esc(prop.name)}">${usageCellHtml(prop._inForm, 'bool')}</td>
+    <td class="col-actions">
+      <button
+        class="btn-icon"
+        title="${canDelete ? 'Delete property' : 'System properties cannot be deleted'}"
+        ${canDelete ? `onclick="deleteSingleProperty('${esc(prop.name)}')"` : 'disabled'}
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+      </button>
+    </td>
+  `;
+  return tr;
+}
+
+/** Render the content of a usage cell. */
+function usageCellHtml(value, kind) {
+  if (value === null) return '<span class="usage-none">—</span>';
+  if (kind === 'records') {
+    if (value === 'loading') return '<span class="usage-spinner">⏳</span>';
+    if (value === 'error')   return '<span class="usage-error">error</span>';
+    const n = Number(value);
+    return `<span class="usage-count ${n > 0 ? 'has-values' : 'no-values'}">${n > 0 ? n.toLocaleString() : '0'}</span>`;
+  }
+  // bool (workflow / form)
+  if (value === true)  return '<span class="usage-check" title="Used">✓</span>';
+  if (value === false) return '<span class="usage-cross" title="Not found">✕</span>';
+  return '<span class="usage-none">—</span>';
+}
+
+/** Re-render a single usage cell without touching the rest of the row. */
+function updateUsageCell(propName, kind, value) {
+  // Update in allProperties array
+  const prop = allProperties.find((p) => p.name === propName);
+  if (prop) {
+    if (kind === 'records')  prop._recordCount = value;
+    if (kind === 'workflow') prop._inWorkflow  = value;
+    if (kind === 'form')     prop._inForm      = value;
+  }
+  const cell = document.getElementById(`usage-${kind}-${propName}`);
+  if (cell) cell.innerHTML = usageCellHtml(value, kind === 'records' ? 'records' : 'bool');
+}
+
+/** Type badge from HubSpot fieldType */
+function propTypeBadge(fieldType) {
+  const map = {
+    select:          ['badge-dropdown', '▾ Dropdown'],
+    radio:           ['badge-radio',    '◉ Radio'],
+    checkbox:        ['badge-checkbox', '☑ Checkboxes'],
+    booleancheckbox: ['badge-checkbox', '☑ Checkbox'],
+    text:            ['badge-pending',  'T  Text'],
+    textarea:        ['badge-pending',  'T  Textarea'],
+    number:          ['badge-pending',  '# Number'],
+    date:            ['badge-pending',  '📅 Date'],
+    file:            ['badge-pending',  '📎 File'],
+  };
+  const [cls, label] = map[fieldType] || ['badge-pending', fieldType || '—'];
+  return `<span class="badge ${cls}">${label}</span>`;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// MANAGE — FILTER / SEARCH
+// ════════════════════════════════════════════════════════════════════════════
+
+function visibleProperties() {
+  const search      = (document.getElementById('searchProps')?.value || '').toLowerCase();
+  const filterSrc   = document.getElementById('filterSource')?.value || 'all';
+  const filterUsage = document.getElementById('filterUsage')?.value  || 'all';
+
+  return allProperties.filter((p) => {
+    // Text search
+    if (search) {
+      const haystack = `${p.label} ${p.name} ${p.groupName}`.toLowerCase();
+      if (!haystack.includes(search)) return false;
+    }
+    // Source filter
+    if (filterSrc === 'custom' && p.hubspotDefined) return false;
+    if (filterSrc === 'system' && !p.hubspotDefined) return false;
+    // Usage filter (only meaningful after analysis)
+    if (filterUsage === 'unused') {
+      if (!analysisStarted) return !p.hubspotDefined; // show custom before analysis
+      const noRecords  = p._recordCount === null || Number(p._recordCount) === 0;
+      const noWorkflow = p._inWorkflow  === false || p._inWorkflow  === null;
+      const noForm     = p._inForm      === false || p._inForm      === null;
+      return !p.hubspotDefined && noRecords && noWorkflow && noForm;
+    }
+    if (filterUsage === 'used') {
+      const hasRecords  = Number(p._recordCount) > 0;
+      const inWorkflow  = p._inWorkflow === true;
+      const inForm      = p._inForm     === true;
+      return hasRecords || inWorkflow || inForm;
+    }
+    return true;
+  });
+}
+
+function filterProperties() {
+  const vis = visibleProperties();
+  renderPropertiesTable(vis);
+  document.getElementById('filterCount').textContent = `${vis.length} of ${allProperties.length} shown`;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// MANAGE — ANALYZE USAGE
+// ════════════════════════════════════════════════════════════════════════════
+
+async function analyzeUsage() {
+  const token      = document.getElementById('token').value.trim();
+  const objectType = document.getElementById('objectType').value;
+
+  if (!token) { alert('Please enter your HubSpot Private App Token first.'); return; }
+  if (!allProperties.length) { alert('Load properties first.'); return; }
+
+  analysisStarted = true;
+
+  const analyzeBtn  = document.getElementById('analyzeBtn');
+  analyzeBtn.disabled = true;
+
+  const progressEl  = document.getElementById('analyzeProgress');
+  const fillEl      = document.getElementById('analyzeProgressFill');
+  const textEl      = document.getElementById('analyzeProgressText');
+  const warningsEl  = document.getElementById('analyzeWarnings');
+
+  progressEl.style.display  = 'block';
+  warningsEl.style.display  = 'none';
+  fillEl.style.width = '0%';
+  textEl.textContent = 'Fetching workflows and forms…';
+
+  // ── Step 1: fetch workflow + form context ──
+  let ctx;
+  try {
+    const res  = await fetch('/api/fetch-usage-context', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ token }),
+    });
+    ctx = await res.json();
+  } catch (err) {
+    textEl.textContent = `Network error: ${err.message}`;
+    analyzeBtn.disabled = false;
+    return;
+  }
+
+  if (ctx.warnings && ctx.warnings.length) {
+    warningsEl.style.display = 'block';
+    warningsEl.innerHTML =
+      `<strong>Some checks were skipped (missing API scopes):</strong><ul>` +
+      ctx.warnings.map((w) => `<li>${esc(w)}</li>`).join('') +
+      `</ul>`;
+  }
+
+  const wfSet   = new Set(ctx.workflowProperties || []);
+  const formSet = new Set(ctx.formProperties     || []);
+  usageContext  = { wfSet, formSet };
+
+  textEl.textContent = `Found ${ctx.workflowCount} workflows, ${ctx.formCount} forms. Updating table…`;
+  fillEl.style.width = '10%';
+
+  // ── Step 2: update workflow + form columns (in-memory, instant) ──
+  for (const prop of allProperties) {
+    updateUsageCell(prop.name, 'workflow', wfSet.has(prop.name));
+    updateUsageCell(prop.name, 'form',     formSet.has(prop.name));
+  }
+
+  // ── Step 3: check record counts for custom properties ──
+  const customProps = allProperties.filter((p) => !p.hubspotDefined);
+  const total       = customProps.length;
+
+  if (total === 0) {
+    fillEl.style.width = '100%';
+    textEl.textContent = 'Analysis complete — no custom properties to check.';
+    analyzeBtn.disabled = false;
+    filterProperties();
+    return;
+  }
+
+  textEl.textContent = `Checking record values for ${total} custom properties…`;
+
+  for (let i = 0; i < total; i++) {
+    const prop = customProps[i];
+    const pct  = Math.round(10 + ((i / total) * 88));
+    fillEl.style.width = pct + '%';
+    textEl.textContent = `Checking records: ${i + 1} / ${total} — "${prop.label || prop.name}"`;
+
+    // Mark as loading
+    updateUsageCell(prop.name, 'records', 'loading');
+
+    try {
+      const res  = await fetch('/api/check-property-records', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ token, objectType, propertyName: prop.name }),
+      });
+      const data = await res.json();
+      updateUsageCell(prop.name, 'records', data.success ? data.total : 'error');
+    } catch {
+      updateUsageCell(prop.name, 'records', 'error');
+    }
+
+    // Small delay to respect HubSpot rate limits (~10 req/s safe)
+    if (i < total - 1) await sleep(120);
+  }
+
+  fillEl.style.width = '100%';
+
+  const unusedCount = allProperties.filter((p) =>
+    !p.hubspotDefined &&
+    Number(p._recordCount) === 0 &&
+    p._inWorkflow === false &&
+    p._inForm     === false
+  ).length;
+
+  textEl.textContent =
+    `Analysis complete — ${unusedCount} unused custom propert${unusedCount === 1 ? 'y' : 'ies'} found.`;
+
+  analyzeBtn.disabled = false;
+  filterProperties(); // re-render with updated data
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// MANAGE — SELECTION
+// ════════════════════════════════════════════════════════════════════════════
+
+function toggleSelectAll() {
+  const master   = document.getElementById('selectAllCb');
+  const checkboxes = document.querySelectorAll('.prop-cb:not([disabled])');
+  checkboxes.forEach((cb) => { cb.checked = master.checked; });
+  updateBulkBar();
+}
+
+function onRowCheckChange() {
+  updateSelectAllState();
+  updateBulkBar();
+}
+
+function updateSelectAllState() {
+  const all      = document.querySelectorAll('.prop-cb:not([disabled])');
+  const checked  = document.querySelectorAll('.prop-cb:not([disabled]):checked');
+  const master   = document.getElementById('selectAllCb');
+  master.checked       = all.length > 0 && checked.length === all.length;
+  master.indeterminate = checked.length > 0 && checked.length < all.length;
+}
+
+function updateBulkBar() {
+  const checked = document.querySelectorAll('.prop-cb:checked');
+  const bar     = document.getElementById('bulkBar');
+  const count   = document.getElementById('bulkCount');
+  if (checked.length === 0) {
+    bar.style.display = 'none';
+  } else {
+    bar.style.display = 'flex';
+    count.textContent = `${checked.length} propert${checked.length === 1 ? 'y' : 'ies'} selected`;
+  }
+}
+
+function clearSelection() {
+  document.querySelectorAll('.prop-cb:checked').forEach((cb) => { cb.checked = false; });
+  document.getElementById('selectAllCb').checked       = false;
+  document.getElementById('selectAllCb').indeterminate = false;
+  updateBulkBar();
+}
+
+/** Select all visible custom properties that appear to be unused. */
+function selectUnused() {
+  const vis = visibleProperties();
+  let count = 0;
+  for (const prop of vis) {
+    if (prop.hubspotDefined) continue;
+    const noRecords  = prop._recordCount === null || Number(prop._recordCount) === 0;
+    const noWorkflow = prop._inWorkflow  !== true;
+    const noForm     = prop._inForm      !== true;
+    const isUnused   = noRecords && noWorkflow && noForm;
+    const cb = document.querySelector(`.prop-cb[data-name="${CSS.escape(prop.name)}"]`);
+    if (cb && isUnused) { cb.checked = true; count++; }
+  }
+  updateSelectAllState();
+  updateBulkBar();
+  if (count === 0) {
+    alert(analysisStarted
+      ? 'No unused properties found among the visible rows.'
+      : 'Run "Analyze Usage" first to identify unused properties.');
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// MANAGE — DELETE
+// ════════════════════════════════════════════════════════════════════════════
+
+function deleteSelected() {
+  const checked = [...document.querySelectorAll('.prop-cb:checked')];
+  if (!checked.length) return;
+  pendingDelete = checked.map((cb) => cb.dataset.name);
+  showDeleteModal(pendingDelete);
+}
+
+function deleteSingleProperty(propName) {
+  pendingDelete = [propName];
+  showDeleteModal(pendingDelete);
+}
+
+function showDeleteModal(names) {
+  const modal    = document.getElementById('deleteModal');
+  const bodyEl   = document.getElementById('deleteModalBody');
+  const n        = names.length;
+  const examples = names.slice(0, 5).map((n) => `<strong>${esc(n)}</strong>`).join(', ');
+  bodyEl.innerHTML =
+    `You are about to permanently delete ${n} propert${n === 1 ? 'y' : 'ies'}` +
+    (n <= 5 ? `: ${examples}` : ` including ${examples} and ${n - 5} more`) +
+    `.<br/><br/>This action <strong>cannot be undone</strong>. All data stored in ${n === 1 ? 'this property' : 'these properties'} will be removed from every record.`;
+  modal.style.display = 'flex';
+}
+
+function closeDeleteModal(e) {
+  if (e && e.target !== document.getElementById('deleteModal')) return;
+  document.getElementById('deleteModal').style.display = 'none';
+}
+
+async function confirmDelete() {
+  document.getElementById('deleteModal').style.display = 'none';
+
+  const token      = document.getElementById('token').value.trim();
+  const objectType = document.getElementById('objectType').value;
+  const names      = pendingDelete;
+  pendingDelete    = [];
+
+  const analyzeProgress = document.getElementById('analyzeProgress');
+  const fillEl          = document.getElementById('analyzeProgressFill');
+  const textEl          = document.getElementById('analyzeProgressText');
+
+  analyzeProgress.style.display = 'block';
+  fillEl.style.width = '0%';
+
+  let deleted = 0, failed = 0;
+
+  for (let i = 0; i < names.length; i++) {
+    const propName = names[i];
+    fillEl.style.width = `${Math.round((i / names.length) * 100)}%`;
+    textEl.textContent = `Deleting ${i + 1} / ${names.length}: "${propName}"…`;
+
+    try {
+      const res  = await fetch('/api/delete-property', {
+        method:  'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ token, objectType, propertyName: propName }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        deleted++;
+        // Visually mark the row as deleted then fade it out
+        const row = document.getElementById(`prop-row-${propName}`);
+        if (row) {
+          row.classList.add('row-deleted');
+          setTimeout(() => row.remove(), 1200);
+        }
+        // Remove from allProperties array
+        allProperties = allProperties.filter((p) => p.name !== propName);
+      } else {
+        failed++;
+        console.warn(`Failed to delete ${propName}: ${data.error}`);
+      }
+    } catch (err) {
+      failed++;
+      console.warn(`Network error deleting ${propName}: ${err.message}`);
+    }
+  }
+
+  fillEl.style.width = '100%';
+  textEl.textContent = `Deleted ${deleted} propert${deleted === 1 ? 'y' : 'ies'}` +
+    (failed > 0 ? `, ${failed} failed (check console)` : '.');
+
+  // Update subtitle and filter count
+  const custom = allProperties.filter((p) => !p.hubspotDefined).length;
+  document.getElementById('mgmtSubtitle').textContent =
+    `${allProperties.length} properties (${custom} custom)`;
+
+  clearSelection();
+  filterProperties();
 }
