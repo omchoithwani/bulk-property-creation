@@ -78,22 +78,50 @@ function toInternalName(label) {
 
 /**
  * Returns the property group name to use when creating a property.
- * For standard objects the group is known; for custom objects we fetch
- * the first available group from the HubSpot groups API.
+ *
+ * Strategy (in order):
+ *  1. Known standard-object group (instant, no API call).
+ *  2. Groups API  GET /crm/v3/properties/groups/{objectType}  — prefers the
+ *     first non-HubSpot-defined group (the object's own default group).
+ *  3. Inspect existing properties  GET /crm/v3/properties/{objectType}  and
+ *     use the most frequent groupName found there.  This works even when the
+ *     groups endpoint fails and covers any object that already has properties.
+ *  4. Throw — so the caller gets a real error instead of silently sending an
+ *     invalid group name to HubSpot.
  */
 async function resolveGroupName(token, objectType) {
   if (DEFAULT_GROUPS[objectType]) return DEFAULT_GROUPS[objectType];
+
+  // ── 2. Groups API ──────────────────────────────────────────────────────────
   try {
     const res = await axios.get(
       `https://api.hubapi.com/crm/v3/properties/groups/${objectType}`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
     const groups = res.data.results || [];
-    // Prefer a non-HubSpot-defined group (i.e. the object's own default group)
     const preferred = groups.find(g => !g.hubspotDefined) || groups[0];
-    if (preferred) return preferred.name;
-  } catch { /* fall through to the guessed name */ }
-  return `${objectType}information`;
+    if (preferred?.name) return preferred.name;
+  } catch { /* fall through */ }
+
+  // ── 3. Extract group from existing properties ──────────────────────────────
+  try {
+    const res = await axios.get(
+      `https://api.hubapi.com/crm/v3/properties/${objectType}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    const counts = {};
+    for (const prop of (res.data.results || [])) {
+      if (prop.groupName) counts[prop.groupName] = (counts[prop.groupName] || 0) + 1;
+    }
+    const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+    if (top?.[0]) return top[0];
+  } catch { /* fall through */ }
+
+  // ── 4. Give up with a clear error ─────────────────────────────────────────
+  throw new Error(
+    `Cannot determine a valid property group for object type "${objectType}". ` +
+    `Ensure the token has crm.schemas.custom.read scope, or that the object already has at least one property.`
+  );
 }
 
 /**
