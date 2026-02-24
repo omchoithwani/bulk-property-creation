@@ -368,11 +368,43 @@ function onObjectTypeChange() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// MANAGE — OBJECT TYPES (dynamic, includes custom objects)
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Fetches standard + custom object types from the server and repopulates the
+ * objectType dropdown. Standard objects are already present as HTML defaults,
+ * so this is a graceful enhancement — if the call fails, nothing breaks.
+ */
+async function loadObjectTypes(token) {
+  if (!token) return;
+  const select = document.getElementById('objectType');
+  const current = select.value;
+
+  try {
+    const res  = await fetch(`/api/list-object-types?token=${encodeURIComponent(token)}`);
+    const data = await res.json();
+    if (!data.success || !data.objectTypes?.length) return;
+
+    select.innerHTML = data.objectTypes
+      .map(ot => `<option value="${esc(ot.value)}"${ot.value === current ? ' selected' : ''}>${esc(ot.label)}</option>`)
+      .join('');
+
+    // Restore selection if still present; otherwise keep whatever is now selected
+    if ([...select.options].some(o => o.value === current)) select.value = current;
+  } catch { /* silent — HTML defaults remain */ }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // MANAGE — LOAD PROPERTIES
 // ════════════════════════════════════════════════════════════════════════════
 
 async function loadProperties() {
   const token      = document.getElementById('token').value.trim();
+
+  // Populate dropdown with custom objects before reading the selection
+  await loadObjectTypes(token);
+
   const objectType = document.getElementById('objectType').value;
 
   if (!token) {
