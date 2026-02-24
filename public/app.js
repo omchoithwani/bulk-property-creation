@@ -198,7 +198,7 @@ async function createProperties() {
   // Ensure custom object groups are cached before we read objectType
   await loadObjectTypes(token);
 
-  const objectType = document.getElementById('objectType').value;
+  const objectType = getObjectType();
 
   if (parsedRows.length === 0) return;
 
@@ -382,6 +382,16 @@ function onObjectTypeChange() {
 const objectTypeDefaultGroups = {};
 
 /**
+ * Returns the currently selected object type.
+ * The manual text input (objectTypeManual) takes priority over the dropdown so
+ * users can target objects that don't appear in the list (e.g. "listing").
+ */
+function getObjectType() {
+  const manual = (document.getElementById('objectTypeManual')?.value || '').trim();
+  return manual || document.getElementById('objectType').value;
+}
+
+/**
  * Fetches standard + custom object types from the server and repopulates the
  * objectType dropdown. Each custom object's defaultGroup is cached in
  * objectTypeDefaultGroups so it can be forwarded during property creation.
@@ -422,7 +432,7 @@ async function loadProperties() {
   // Populate dropdown with custom objects before reading the selection
   await loadObjectTypes(token);
 
-  const objectType = document.getElementById('objectType').value;
+  const objectType = getObjectType();
 
   if (!token) {
     alert('Please enter your HubSpot Private App Token first.');
@@ -679,7 +689,7 @@ function filterProperties() {
 
 async function analyzeUsage() {
   const token      = document.getElementById('token').value.trim();
-  const objectType = document.getElementById('objectType').value;
+  const objectType = getObjectType();
 
   if (!token) { alert('Please enter your HubSpot Private App Token first.'); return; }
   if (!allProperties.length) { alert('Load properties first.'); return; }
@@ -915,7 +925,7 @@ async function confirmDelete() {
   document.getElementById('deleteModal').style.display = 'none';
 
   const token      = document.getElementById('token').value.trim();
-  const objectType = document.getElementById('objectType').value;
+  const objectType = getObjectType();
   const names      = pendingDelete;
   pendingDelete    = [];
 
@@ -1023,7 +1033,7 @@ function formatDate(dateStr) {
 
 function exportCSV() {
   const vis = visibleProperties();
-  const objectType = document.getElementById('objectType').value;
+  const objectType = getObjectType();
 
   const headers = [
     'Label', 'Internal Name', 'Type', 'Group', 'Source',
