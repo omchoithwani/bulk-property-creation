@@ -445,6 +445,9 @@ td.muted { color: var(--text-muted); font-style: italic; }
 .badge-dropdown  { background: #EDF7FF; color: #0066CC; }
 .badge-radio     { background: #FFF5E6; color: #CC5500; }
 .badge-checkbox  { background: #E6F9F7; color: #007A6C; }
+.badge-text      { background: #F3F0FF; color: #5E35B1; }
+.badge-number    { background: #FFF8E1; color: #B45309; }
+.badge-date      { background: #E3F2FD; color: #1565C0; }
 
 .badge-success   { background: var(--green-light);  color: #007A6C; }
 .badge-error     { background: var(--red-light);    color: var(--red); }

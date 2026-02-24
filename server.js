@@ -21,9 +21,21 @@ app.use(express.static('public'));
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const PROPERTY_TYPES = {
-  'Drop-down Select':    { type: 'enumeration', fieldType: 'select' },
-  'Radio Select':        { type: 'enumeration', fieldType: 'radio' },
-  'Multiple Checkboxes': { type: 'enumeration', fieldType: 'checkbox' },
+  // Enumeration types — require Options
+  'Drop-down Select':      { type: 'enumeration', fieldType: 'select',       enumeration: true },
+  'Radio Select':          { type: 'enumeration', fieldType: 'radio',        enumeration: true },
+  'Multiple Checkboxes':   { type: 'enumeration', fieldType: 'checkbox',     enumeration: true },
+  // Text / string types
+  'Single Line Text':      { type: 'string',      fieldType: 'text' },
+  'Multi-line Text':       { type: 'string',      fieldType: 'textarea' },
+  'Phone Number':          { type: 'string',      fieldType: 'phonenumber' },
+  'URL':                   { type: 'string',      fieldType: 'text' },
+  'Rich Text':             { type: 'string',      fieldType: 'html' },
+  // Numeric
+  'Number':                { type: 'number',      fieldType: 'number' },
+  // Date / time
+  'Date Picker':           { type: 'date',        fieldType: 'date' },
+  'Date and Time Picker':  { type: 'datetime',    fieldType: 'date' },
 };
 
 const VALID_TYPES = Object.keys(PROPERTY_TYPES);
@@ -164,7 +176,8 @@ app.post('/api/create-property', async (req, res) => {
     fieldType:   typeInfo.fieldType,
     groupName,
     description: property.Description || '',
-    options:     parseOptions(property.Options),
+    // Only enumeration types use options — sending options for other types causes API errors
+    ...(typeInfo.enumeration ? { options: parseOptions(property.Options) } : {}),
   };
 
   try {
@@ -302,23 +315,41 @@ function extractReportProps(report) {
 function extractFormProps(form) {
   const names = new Set();
 
-  // Recursively scan a list of fields, including any dependent/conditional fields.
+  // Recursively scan a list of field objects.
   function scanFields(fields) {
     for (const field of (fields || [])) {
       if (field.name) names.add(field.name);
-      // v3 forms can nest conditional fields under each field's dependentFields array
+
+      // v3 forms: conditional fields live at
+      //   field.dependentFields[].dependentFieldFilters[].dependentFormField
+      // (NOT dep.fields — that path doesn't exist in the v3 response)
       for (const dep of (field.dependentFields || [])) {
+        for (const filter of (dep.dependentFieldFilters || [])) {
+          if (filter.dependentFormField) {
+            scanFields([filter.dependentFormField]); // recurse for further nesting
+          }
+        }
+        // legacy fallback: dep.fields[] (old embedded-forms structure)
         scanFields(dep.fields);
       }
     }
   }
 
-  // v3 forms
+  // v3 forms: fieldGroups[].fields[]
   for (const group of (form.fieldGroups || [])) {
     scanFields(group.fields);
   }
-  // legacy v2 forms
-  scanFields(form.formFields);
+
+  // legacy v2 forms: formFields can be a flat array OR an array-of-row-arrays
+  //   [[field1, field2], [field3]]  ← rows
+  const legacyFields = form.formFields;
+  if (Array.isArray(legacyFields)) {
+    if (legacyFields.length > 0 && Array.isArray(legacyFields[0])) {
+      for (const row of legacyFields) scanFields(row);
+    } else {
+      scanFields(legacyFields);
+    }
+  }
 
   return names;
 }

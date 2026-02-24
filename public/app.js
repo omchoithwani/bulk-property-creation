@@ -18,10 +18,21 @@ function toggleToken() {
 function downloadTemplate() {
   const rows = [
     ['Name', 'Type', 'Description', 'Options'],
-    ['Lead Source', 'Drop-down Select', 'How the contact discovered us', 'Website;Referral;Social Media;Email Campaign;Event'],
-    ['Preferred Contact Method', 'Radio Select', 'Contact preferred communication channel', 'Phone;Email;Text Message'],
-    ['Product Interests', 'Multiple Checkboxes', 'Products the contact is interested in', 'Product A;Product B;Product C;Product D'],
-    ['Decision Stage', 'Drop-down Select', 'Where the contact is in the buying journey', 'Awareness;Consideration;Decision'],
+    // Enumeration types — fill in the Options column
+    ['Lead Source',          'Drop-down Select',     'How the contact discovered us',           'Website;Referral;Social Media;Email Campaign;Event'],
+    ['Preferred Contact',    'Radio Select',          'Preferred communication channel',         'Phone;Email;Text Message'],
+    ['Product Interests',    'Multiple Checkboxes',   'Products the contact is interested in',   'Product A;Product B;Product C'],
+    // Text / string types — leave Options blank
+    ['Job Title',            'Single Line Text',      'Contact job title',                       ''],
+    ['Notes',                'Multi-line Text',       'Additional notes about the contact',      ''],
+    ['Office Phone',         'Phone Number',          'Primary office phone number',             ''],
+    ['Website',              'URL',                   'Company or personal website URL',         ''],
+    ['Bio',                  'Rich Text',             'Formatted biography or description',      ''],
+    // Numeric
+    ['Annual Revenue',       'Number',                'Annual revenue amount in USD',            ''],
+    // Date / time
+    ['Contract Date',        'Date Picker',           'Date the contract was signed',            ''],
+    ['Meeting Scheduled',    'Date and Time Picker',  'Date and time of the next meeting',       ''],
   ];
 
   const csv = rows.map((r) => r.map(escapeCSV).join(',')).join('\r\n');
@@ -304,9 +315,17 @@ function updateProgress(done, total, label) {
 /* ── Badge helpers ─────────────────────────────────────────────────── */
 function typeBadge(type) {
   const map = {
-    'Drop-down Select':    ['badge-dropdown', '▾ Dropdown'],
-    'Radio Select':        ['badge-radio',    '◉ Radio'],
-    'Multiple Checkboxes': ['badge-checkbox', '☑ Checkboxes'],
+    'Drop-down Select':     ['badge-dropdown', '▾ Dropdown'],
+    'Radio Select':         ['badge-radio',    '◉ Radio'],
+    'Multiple Checkboxes':  ['badge-checkbox', '☑ Checkboxes'],
+    'Single Line Text':     ['badge-text',     'T  Text'],
+    'Multi-line Text':      ['badge-text',     '¶  Textarea'],
+    'Phone Number':         ['badge-text',     '☏ Phone'],
+    'URL':                  ['badge-text',     '⌁ URL'],
+    'Rich Text':            ['badge-text',     '⟨⟩ Rich Text'],
+    'Number':               ['badge-number',   '# Number'],
+    'Date Picker':          ['badge-date',     '📅 Date'],
+    'Date and Time Picker': ['badge-date',     '⊙ DateTime'],
   };
   const [cls, label] = map[type] || ['badge-pending', type];
   return `<span class="badge ${cls}">${label}</span>`;
@@ -472,7 +491,7 @@ function buildPropertyRow(prop) {
       <span class="prop-label">${esc(prop.label || prop.name)}</span>
       <span class="prop-internal">${esc(prop.name)}</span>
     </td>
-    <td>${propTypeBadge(prop.fieldType)}</td>
+    <td>${propTypeBadge(prop.fieldType, prop.type)}</td>
     <td class="muted">${esc(prop.groupName || '—')}</td>
     <td class="col-source">
       <span class="badge ${isSystem ? 'badge-system' : 'badge-custom'}">${isSystem ? 'System' : 'Custom'}</span>
@@ -536,17 +555,19 @@ function updateUsageCell(propName, kind, value) {
   if (cell) cell.innerHTML = usageCellHtml(value, kind, propName);
 }
 
-/** Type badge from HubSpot fieldType */
-function propTypeBadge(fieldType) {
+/** Type badge from HubSpot fieldType + type (to distinguish date vs datetime) */
+function propTypeBadge(fieldType, type) {
   const map = {
     select:          ['badge-dropdown', '▾ Dropdown'],
     radio:           ['badge-radio',    '◉ Radio'],
     checkbox:        ['badge-checkbox', '☑ Checkboxes'],
-    booleancheckbox: ['badge-checkbox', '☑ Checkbox'],
-    text:            ['badge-pending',  'T  Text'],
-    textarea:        ['badge-pending',  'T  Textarea'],
-    number:          ['badge-pending',  '# Number'],
-    date:            ['badge-pending',  '📅 Date'],
+    booleancheckbox: ['badge-checkbox', '☑ Boolean'],
+    text:            ['badge-text',     'T  Text'],
+    textarea:        ['badge-text',     '¶  Textarea'],
+    phonenumber:     ['badge-text',     '☏ Phone'],
+    html:            ['badge-text',     '⟨⟩ Rich Text'],
+    number:          ['badge-number',   '# Number'],
+    date:            type === 'datetime' ? ['badge-date', '⊙ DateTime'] : ['badge-date', '📅 Date'],
     file:            ['badge-pending',  '📎 File'],
   };
   const [cls, label] = map[fieldType] || ['badge-pending', fieldType || '—'];
