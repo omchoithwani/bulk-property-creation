@@ -246,7 +246,7 @@ async function createProperties() {
       const res  = await fetch('/api/create-property', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ token, objectType, property: row }),
+        body:    JSON.stringify({ token, objectType, property: row, defaultGroup: objectTypeDefaultGroups[objectType] || null }),
       });
       const data = await res.json();
 
@@ -372,9 +372,17 @@ function onObjectTypeChange() {
 // ════════════════════════════════════════════════════════════════════════════
 
 /**
+ * Maps objectType value → defaultGroup name, populated by loadObjectTypes().
+ * Forwarded to create-property so the server never has to guess the group.
+ */
+const objectTypeDefaultGroups = {};
+
+/**
  * Fetches standard + custom object types from the server and repopulates the
- * objectType dropdown. Standard objects are already present as HTML defaults,
- * so this is a graceful enhancement — if the call fails, nothing breaks.
+ * objectType dropdown. Each custom object's defaultGroup is cached in
+ * objectTypeDefaultGroups so it can be forwarded during property creation.
+ * Standard objects are already present as HTML defaults, so this is a graceful
+ * enhancement — if the call fails, nothing breaks.
  */
 async function loadObjectTypes(token) {
   if (!token) return;
@@ -385,6 +393,11 @@ async function loadObjectTypes(token) {
     const res  = await fetch(`/api/list-object-types?token=${encodeURIComponent(token)}`);
     const data = await res.json();
     if (!data.success || !data.objectTypes?.length) return;
+
+    // Cache defaultGroup for every object type that has one
+    data.objectTypes.forEach(ot => {
+      if (ot.defaultGroup) objectTypeDefaultGroups[ot.value] = ot.defaultGroup;
+    });
 
     select.innerHTML = data.objectTypes
       .map(ot => `<option value="${esc(ot.value)}"${ot.value === current ? ' selected' : ''}>${esc(ot.label)}</option>`)

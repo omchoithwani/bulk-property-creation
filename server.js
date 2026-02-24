@@ -184,7 +184,7 @@ app.post('/api/parse-csv', upload.single('file'), (req, res) => {
  * Body: { token, objectType, property: { Name, Type, Description, Options } }
  */
 app.post('/api/create-property', async (req, res) => {
-  const { token, objectType, property } = req.body;
+  const { token, objectType, property, defaultGroup } = req.body;
 
   if (!token || !objectType || !property) {
     return res.status(400).json({ success: false, error: 'Missing required fields.' });
@@ -195,7 +195,9 @@ app.post('/api/create-property', async (req, res) => {
     return res.status(400).json({ success: false, error: `Unknown property type: ${property.Type}` });
   }
 
-  const groupName = await resolveGroupName(token, objectType);
+  // Use the group name provided by the caller (resolved at object-type load time)
+  // and only fall back to the dynamic lookup if it was not supplied.
+  const groupName = defaultGroup || await resolveGroupName(token, objectType);
   const internalName = toInternalName(property.Name);
 
   const body = {
@@ -389,6 +391,8 @@ function extractFormProps(form) {
  * GET /api/list-object-types?token=
  * Returns standard CRM objects plus any custom objects in the portal
  * (fetched from GET /crm/v3/schemas — requires crm.schemas.custom.read scope).
+ * Each custom object entry includes a `defaultGroup` so callers can pass it
+ * directly to create-property without an extra round-trip.
  * If the schemas call fails (missing scope, network, etc.) the standard objects
  * are still returned; a non-fatal warning is included in the response.
  */
@@ -400,14 +404,33 @@ app.get('/api/list-object-types', async (req, res) => {
   let warning = null;
 
   try {
-    const response = await axios.get('https://api.hubapi.com/crm/v3/schemas', {
+    const schemasRes = await axios.get('https://api.hubapi.com/crm/v3/schemas', {
       headers: { Authorization: `Bearer ${token}` },
       params:  { archived: false },
     });
-    customObjects = (response.data.results || []).map(schema => ({
-      value: schema.objectTypeId,
-      label: schema.labels?.plural || schema.name,
-    }));
+
+    // Fetch the property groups for each custom object in parallel so we know
+    // the correct defaultGroup to use when creating properties later.
+    customObjects = await Promise.all(
+      (schemasRes.data.results || []).map(async schema => {
+        let defaultGroup = null;
+        try {
+          const groupsRes = await axios.get(
+            `https://api.hubapi.com/crm/v3/properties/groups/${schema.objectTypeId}`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          const groups = groupsRes.data.results || [];
+          // Prefer a group that belongs to the object itself (hubspotDefined=false)
+          const preferred = groups.find(g => !g.hubspotDefined) || groups[0];
+          defaultGroup = preferred?.name || null;
+        } catch { /* defaultGroup stays null; create-property will handle it */ }
+        return {
+          value:        schema.objectTypeId,
+          label:        schema.labels?.plural || schema.name,
+          defaultGroup,
+        };
+      })
+    );
   } catch (err) {
     warning = `Custom objects could not be loaded: ${err.response?.data?.message || err.message}`;
   }
