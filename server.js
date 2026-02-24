@@ -21,9 +21,21 @@ app.use(express.static('public'));
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const PROPERTY_TYPES = {
-  'Drop-down Select':    { type: 'enumeration', fieldType: 'select' },
-  'Radio Select':        { type: 'enumeration', fieldType: 'radio' },
-  'Multiple Checkboxes': { type: 'enumeration', fieldType: 'checkbox' },
+  // Enumeration types — require Options
+  'Drop-down Select':      { type: 'enumeration', fieldType: 'select',       enumeration: true },
+  'Radio Select':          { type: 'enumeration', fieldType: 'radio',        enumeration: true },
+  'Multiple Checkboxes':   { type: 'enumeration', fieldType: 'checkbox',     enumeration: true },
+  // Text / string types
+  'Single Line Text':      { type: 'string',      fieldType: 'text' },
+  'Multi-line Text':       { type: 'string',      fieldType: 'textarea' },
+  'Phone Number':          { type: 'string',      fieldType: 'phonenumber' },
+  'URL':                   { type: 'string',      fieldType: 'text' },
+  'Rich Text':             { type: 'string',      fieldType: 'html' },
+  // Numeric
+  'Number':                { type: 'number',      fieldType: 'number' },
+  // Date / time
+  'Date Picker':           { type: 'date',        fieldType: 'date' },
+  'Date and Time Picker':  { type: 'datetime',    fieldType: 'date' },
 };
 
 const VALID_TYPES = Object.keys(PROPERTY_TYPES);
@@ -164,7 +176,8 @@ app.post('/api/create-property', async (req, res) => {
     fieldType:   typeInfo.fieldType,
     groupName,
     description: property.Description || '',
-    options:     parseOptions(property.Options),
+    // Only enumeration types use options — sending options for other types causes API errors
+    ...(typeInfo.enumeration ? { options: parseOptions(property.Options) } : {}),
   };
 
   try {
