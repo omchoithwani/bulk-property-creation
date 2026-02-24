@@ -432,15 +432,22 @@ app.get('/api/list-object-types', async (req, res) => {
   let warning = null;
 
   try {
-    const schemasRes = await axios.get('https://api.hubapi.com/crm/v3/schemas', {
-      headers: { Authorization: `Bearer ${token}` },
-      params:  { archived: false },
-    });
+    // The schemas endpoint is paginated — collect all pages before processing.
+    const allSchemas = [];
+    let after = undefined;
+    do {
+      const schemasRes = await axios.get('https://api.hubapi.com/crm/v3/schemas', {
+        headers: { Authorization: `Bearer ${token}` },
+        params:  { archived: false, limit: 100, ...(after ? { after } : {}) },
+      });
+      allSchemas.push(...(schemasRes.data.results || []));
+      after = schemasRes.data.paging?.next?.after;
+    } while (after);
 
     // Fetch the property groups for each custom object in parallel so we know
     // the correct defaultGroup to use when creating properties later.
     customObjects = await Promise.all(
-      (schemasRes.data.results || []).map(async schema => {
+      allSchemas.map(async schema => {
         let defaultGroup = null;
         try {
           const groupsRes = await axios.get(
