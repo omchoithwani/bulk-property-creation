@@ -48,6 +48,15 @@ const DEFAULT_GROUPS = {
   products:  'productinformation',
 };
 
+// Standard CRM objects shown in the UI by default (no API call needed)
+const STANDARD_OBJECTS = [
+  { value: 'contacts',  label: 'Contacts' },
+  { value: 'companies', label: 'Companies' },
+  { value: 'deals',     label: 'Deals' },
+  { value: 'tickets',   label: 'Tickets' },
+  { value: 'products',  label: 'Products' },
+];
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 /**
@@ -65,6 +74,26 @@ function toInternalName(label) {
   if (/^[0-9]/.test(name)) name = 'p_' + name;
 
   return name.slice(0, 250); // HubSpot max length
+}
+
+/**
+ * Returns the property group name to use when creating a property.
+ * For standard objects the group is known; for custom objects we fetch
+ * the first available group from the HubSpot groups API.
+ */
+async function resolveGroupName(token, objectType) {
+  if (DEFAULT_GROUPS[objectType]) return DEFAULT_GROUPS[objectType];
+  try {
+    const res = await axios.get(
+      `https://api.hubapi.com/crm/v3/properties/groups/${objectType}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    const groups = res.data.results || [];
+    // Prefer a non-HubSpot-defined group (i.e. the object's own default group)
+    const preferred = groups.find(g => !g.hubspotDefined) || groups[0];
+    if (preferred) return preferred.name;
+  } catch { /* fall through to the guessed name */ }
+  return `${objectType}information`;
 }
 
 /**
@@ -166,7 +195,7 @@ app.post('/api/create-property', async (req, res) => {
     return res.status(400).json({ success: false, error: `Unknown property type: ${property.Type}` });
   }
 
-  const groupName = DEFAULT_GROUPS[objectType] || `${objectType}information`;
+  const groupName = await resolveGroupName(token, objectType);
   const internalName = toInternalName(property.Name);
 
   const body = {
@@ -355,6 +384,40 @@ function extractFormProps(form) {
 }
 
 // ── Manage-properties routes ────────────────────────────────────────────────
+
+/**
+ * GET /api/list-object-types?token=
+ * Returns standard CRM objects plus any custom objects in the portal
+ * (fetched from GET /crm/v3/schemas — requires crm.schemas.custom.read scope).
+ * If the schemas call fails (missing scope, network, etc.) the standard objects
+ * are still returned; a non-fatal warning is included in the response.
+ */
+app.get('/api/list-object-types', async (req, res) => {
+  const { token } = req.query;
+  if (!token) return res.status(400).json({ success: false, error: 'token is required.' });
+
+  let customObjects = [];
+  let warning = null;
+
+  try {
+    const response = await axios.get('https://api.hubapi.com/crm/v3/schemas', {
+      headers: { Authorization: `Bearer ${token}` },
+      params:  { archived: false },
+    });
+    customObjects = (response.data.results || []).map(schema => ({
+      value: schema.objectTypeId,
+      label: schema.labels?.plural || schema.name,
+    }));
+  } catch (err) {
+    warning = `Custom objects could not be loaded: ${err.response?.data?.message || err.message}`;
+  }
+
+  res.json({
+    success:     true,
+    objectTypes: [...STANDARD_OBJECTS, ...customObjects],
+    warning,
+  });
+});
 
 /**
  * GET /api/list-properties?token=&objectType=
