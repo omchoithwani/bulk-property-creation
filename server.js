@@ -48,13 +48,25 @@ const DEFAULT_GROUPS = {
   products:  'productinformation',
 };
 
-// Standard CRM objects shown in the UI by default (no API call needed)
+// Standard CRM objects shown in the UI by default (no API call needed).
+// These are built-in HubSpot object types that are never returned by the
+// custom-schemas endpoint (/crm/v3/schemas), so they must be listed here.
 const STANDARD_OBJECTS = [
-  { value: 'contacts',  label: 'Contacts' },
-  { value: 'companies', label: 'Companies' },
-  { value: 'deals',     label: 'Deals' },
-  { value: 'tickets',   label: 'Tickets' },
-  { value: 'products',  label: 'Products' },
+  { value: 'contacts',   label: 'Contacts' },
+  { value: 'companies',  label: 'Companies' },
+  { value: 'deals',      label: 'Deals' },
+  { value: 'tickets',    label: 'Tickets' },
+  { value: 'products',   label: 'Products' },
+  { value: 'line_items', label: 'Line Items' },
+  { value: 'quotes',     label: 'Quotes' },
+  { value: 'calls',      label: 'Calls' },
+  { value: 'emails',     label: 'Emails' },
+  { value: 'meetings',   label: 'Meetings' },
+  { value: 'notes',      label: 'Notes' },
+  { value: 'tasks',      label: 'Tasks' },
+  { value: 'communications', label: 'Communications' },
+  { value: 'feedback_submissions', label: 'Feedback Submissions' },
+  { value: 'leads',      label: 'Leads' },
 ];
 
 // ── Helpers ────────────────────────────────────────────────────────────────
