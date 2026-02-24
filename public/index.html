@@ -75,6 +75,14 @@
               <option value="feedback_submissions">Feedback Submissions</option>
               <option value="leads">Leads</option>
             </select>
+            <div style="margin-top:6px;">
+              <label for="objectTypeManual" style="font-size:0.82em;color:#555;">
+                Object not in list? Enter its type ID or name manually:
+              </label>
+              <input id="objectTypeManual" type="text" placeholder="e.g. listing or 2-12345"
+                style="width:100%;margin-top:3px;padding:5px 8px;border:1px solid #ccc;border-radius:4px;font-size:0.9em;"
+                oninput="onObjectTypeChange()" />
+            </div>
             <p class="hint">Properties will be created or managed under this object type.</p>
           </div>
         </div>

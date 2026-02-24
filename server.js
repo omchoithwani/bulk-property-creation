@@ -471,13 +471,16 @@ app.get('/api/list-object-types', async (req, res) => {
           const preferred = groups.find(g => !g.hubspotDefined) || groups[0];
           defaultGroup = preferred?.name || null;
         } catch { /* defaultGroup stays null; create-property will handle it */ }
-        return {
-          value:        schema.objectTypeId,
-          label:        schema.labels?.plural || schema.name,
-          defaultGroup,
-        };
+        // objectTypeId can be absent on some app-managed objects; fall back to
+        // fullyQualifiedName then name so the entry is still usable.
+        const value = schema.objectTypeId || schema.fullyQualifiedName || schema.name;
+        const label = schema.labels?.plural || schema.labels?.singular || schema.name || value;
+        if (!value) return null; // skip entirely unusable schemas
+        return { value, label, defaultGroup };
       })
     );
+    // Remove null entries (schemas with no usable identifier)
+    customObjects = customObjects.filter(Boolean);
   } catch (err) {
     warning = `Custom objects could not be loaded: ${err.response?.data?.message || err.message}`;
   }
