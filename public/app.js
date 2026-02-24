@@ -187,14 +187,18 @@ function updateCreateBtn() {
 
 /* ── Property creation ─────────────────────────────────────────────── */
 async function createProperties() {
-  const token      = document.getElementById('token').value.trim();
-  const objectType = document.getElementById('objectType').value;
+  const token = document.getElementById('token').value.trim();
 
   if (!token) {
     alert('Please enter your HubSpot Private App Token before creating properties.');
     document.getElementById('token').focus();
     return;
   }
+
+  // Ensure custom object groups are cached before we read objectType
+  await loadObjectTypes(token);
+
+  const objectType = document.getElementById('objectType').value;
 
   if (parsedRows.length === 0) return;
 
