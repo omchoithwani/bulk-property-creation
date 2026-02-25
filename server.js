@@ -235,23 +235,26 @@ app.post('/api/create-property', async (req, res) => {
     return res.status(400).json({ success: false, error: `Unknown property type: ${property.Type}` });
   }
 
-  // Use the group name provided by the caller (resolved at object-type load time)
-  // and only fall back to the dynamic lookup if it was not supplied.
-  const groupName = defaultGroup || await resolveGroupName(token, objectType);
-  const internalName = toInternalName(property.Name);
-
-  const body = {
-    name:        internalName,
-    label:       property.Name,
-    type:        typeInfo.type,
-    fieldType:   typeInfo.fieldType,
-    groupName,
-    description: property.Description || '',
-    // Only enumeration types use options — sending options for other types causes API errors
-    ...(typeInfo.enumeration ? { options: parseOptions(property.Options) } : {}),
-  };
-
   try {
+    // Use the group name provided by the caller (resolved at object-type load time)
+    // and only fall back to the dynamic lookup if it was not supplied.
+    // IMPORTANT: resolveGroupName can throw — keep it inside the try so the
+    // catch below converts any failure into a proper JSON error response instead
+    // of dropping the connection (which shows as "Failed to fetch" in the UI).
+    const groupName = defaultGroup || await resolveGroupName(token, objectType);
+    const internalName = toInternalName(property.Name);
+
+    const body = {
+      name:        internalName,
+      label:       property.Name,
+      type:        typeInfo.type,
+      fieldType:   typeInfo.fieldType,
+      groupName,
+      description: property.Description || '',
+      // Only enumeration types use options — sending options for other types causes API errors
+      ...(typeInfo.enumeration ? { options: parseOptions(property.Options) } : {}),
+    };
+
     const response = await axios.post(
       `https://api.hubapi.com/crm/v3/properties/${objectType}`,
       body,
