@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cold Email Personalizer</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0f1117;
+      --surface:   #1a1d27;
+      --surface2:  #22263a;
+      --border:    #2e3250;
+      --accent:    #6c63ff;
+      --accent2:   #a78bfa;
+      --green:     #34d399;
+      --red:       #f87171;
+      --yellow:    #fbbf24;
+      --text:      #e2e8f0;
+      --muted:     #8892b0;
+      --radius:    10px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    /* ── Layout ── */
+    .page-header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 18px 32px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .page-header .logo {
+      width: 36px; height: 36px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+    }
+    .page-header h1 { font-size: 17px; font-weight: 600; letter-spacing: -.3px; }
+    .page-header .subtitle { color: var(--muted); font-size: 12px; }
+    .header-nav { margin-left: auto; }
+    .header-nav a {
+      color: var(--muted); font-size: 13px; text-decoration: none;
+      padding: 6px 12px; border-radius: 6px; transition: color .2s, background .2s;
+    }
+    .header-nav a:hover { color: var(--text); background: var(--surface2); }
+
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 32px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 28px;
+    }
+
+    /* ── Cards ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+    }
+    .card-title {
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .8px;
+      color: var(--muted);
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .card-title .step-badge {
+      width: 20px; height: 20px;
+      background: var(--accent);
+      border-radius: 50%;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 700; color: #fff;
+    }
+
+    /* ── API key ── */
+    .api-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    .api-row input[type="password"],
+    .api-row input[type="text"] {
+      flex: 1;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 14px;
+      outline: none;
+      transition: border-color .2s;
+    }
+    .api-row input:focus { border-color: var(--accent); }
+    .toggle-vis {
+      background: none; border: 1px solid var(--border);
+      color: var(--muted); padding: 10px 12px;
+      border-radius: 8px; cursor: pointer; font-size: 13px;
+      transition: color .2s, border-color .2s;
+    }
+    .toggle-vis:hover { color: var(--text); border-color: var(--accent); }
+    .api-hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+    .api-hint a { color: var(--accent2); text-decoration: none; }
+
+    /* ── File drop zone ── */
+    .drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 40px 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color .2s, background .2s;
+      position: relative;
+    }
+    .drop-zone.dragover { border-color: var(--accent); background: rgba(108,99,255,.06); }
+    .drop-zone input[type="file"] {
+      position: absolute; inset: 0; opacity: 0; cursor: pointer;
+    }
+    .drop-icon { font-size: 36px; margin-bottom: 10px; }
+    .drop-zone p { color: var(--muted); font-size: 13px; }
+    .drop-zone strong { color: var(--text); }
+    .file-info {
+      margin-top: 12px;
+      background: var(--surface2);
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 13px;
+      color: var(--green);
+      display: none;
+      align-items: center;
+      gap: 8px;
+    }
+    .file-info.visible { display: flex; }
+
+    /* ── Format hint ── */
+    .format-hint {
+      background: var(--surface2);
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-top: 14px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .format-hint code {
+      background: rgba(108,99,255,.15);
+      color: var(--accent2);
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-family: 'Menlo', monospace;
+    }
+
+    /* ── Buttons ── */
+    .btn {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 10px 20px; border-radius: 8px;
+      font-size: 14px; font-weight: 500; cursor: pointer;
+      transition: opacity .15s, transform .1s;
+      border: none;
+    }
+    .btn:active { transform: scale(.98); }
+    .btn:disabled { opacity: .4; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover:not(:disabled) { opacity: .88; }
+    .btn-outline {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .btn-outline:hover:not(:disabled) { border-color: var(--accent); color: var(--accent2); }
+    .btn-green { background: rgba(52,211,153,.15); color: var(--green); border: 1px solid rgba(52,211,153,.3); }
+    .btn-green:hover:not(:disabled) { background: rgba(52,211,153,.25); }
+    .btn-sm { padding: 5px 12px; font-size: 12px; }
+
+    /* ── Action bar ── */
+    .action-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .concurrency-wrap {
+      display: flex; align-items: center; gap: 8px;
+      margin-left: auto;
+    }
+    .concurrency-wrap label { font-size: 12px; color: var(--muted); }
+    .concurrency-wrap select {
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--text); border-radius: 6px; padding: 5px 10px; font-size: 12px;
+    }
+
+    /* ── Progress ── */
+    .progress-wrap { display: none; }
+    .progress-wrap.visible { display: block; }
+    .progress-bar-bg {
+      height: 6px; background: var(--surface2); border-radius: 99px; overflow: hidden;
+      margin: 10px 0;
+    }
+    .progress-bar { height: 100%; background: var(--accent); border-radius: 99px; transition: width .3s; width: 0%; }
+    .progress-stats { font-size: 12px; color: var(--muted); display: flex; gap: 16px; }
+    .stat-done   { color: var(--green); }
+    .stat-fail   { color: var(--red); }
+    .stat-pending { color: var(--muted); }
+
+    /* ── Results table ── */
+    .results-section { display: none; }
+    .results-section.visible { display: block; }
+
+    .export-bar {
+      display: flex; gap: 10px; align-items: center; margin-bottom: 16px; flex-wrap: wrap;
+    }
+    .export-bar .result-summary {
+      margin-left: auto; font-size: 12px; color: var(--muted);
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+    }
+    table {
+      width: 100%; border-collapse: collapse; font-size: 13px;
+    }
+    thead { background: var(--surface2); }
+    th {
+      padding: 12px 16px; text-align: left; font-weight: 600;
+      color: var(--muted); font-size: 11px; text-transform: uppercase;
+      letter-spacing: .6px; white-space: nowrap;
+    }
+    td {
+      padding: 14px 16px;
+      border-top: 1px solid var(--border);
+      vertical-align: top;
+    }
+    tr:hover td { background: rgba(255,255,255,.02); }
+
+    .td-name  { min-width: 140px; font-weight: 500; }
+    .td-company { min-width: 130px; color: var(--muted); }
+    .td-line  { min-width: 280px; line-height: 1.5; }
+    .td-ps    { min-width: 220px; line-height: 1.5; color: var(--accent2); font-style: italic; }
+    .td-status { min-width: 110px; }
+    .td-actions { min-width: 110px; white-space: nowrap; }
+
+    .badge {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 10px; border-radius: 99px; font-size: 11px; font-weight: 500;
+    }
+    .badge-pending  { background: rgba(139,146,176,.12); color: var(--muted); }
+    .badge-running  { background: rgba(108,99,255,.15); color: var(--accent2); }
+    .badge-done     { background: rgba(52,211,153,.12); color: var(--green); }
+    .badge-error    { background: rgba(248,113,113,.12); color: var(--red); }
+
+    .scrape-icons { font-size: 11px; color: var(--muted); margin-top: 4px; }
+    .scrape-ok    { color: var(--green); }
+
+    .copy-feedback {
+      font-size: 11px; color: var(--green);
+      display: none;
+      margin-left: 4px;
+    }
+    .copy-feedback.show { display: inline; }
+
+    .error-msg { font-size: 12px; color: var(--red); margin-top: 4px; }
+
+    /* ── Loading dots ── */
+    .dot-anim::after {
+      content: '';
+      display: inline-block;
+      animation: dots 1.4s infinite;
+    }
+    @keyframes dots {
+      0%   { content: ''; }
+      33%  { content: '.'; }
+      66%  { content: '..'; }
+      100% { content: '...'; }
+    }
+
+    /* ── Empty state ── */
+    .empty-state {
+      text-align: center; padding: 48px 24px; color: var(--muted);
+    }
+    .empty-state .empty-icon { font-size: 40px; margin-bottom: 12px; }
+
+    /* ── Toast ── */
+    #toast {
+      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(80px);
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--text); padding: 10px 20px; border-radius: 99px;
+      font-size: 13px; pointer-events: none; transition: transform .3s ease;
+      z-index: 9999;
+    }
+    #toast.visible { transform: translateX(-50%) translateY(0); }
+  </style>
+</head>
+<body>
+
+<header class="page-header">
+  <div class="logo">✉</div>
+  <div>
+    <h1>Cold Email Personalizer</h1>
+    <div class="subtitle">AI-powered first lines &amp; P.S. from real prospect research</div>
+  </div>
+  <nav class="header-nav">
+    <a href="/">HubSpot Property Creator</a>
+  </nav>
+</header>
+
+<div class="container">
+
+  <!-- Step 1: API Key -->
+  <div class="card">
+    <div class="card-title"><span class="step-badge">1</span> Anthropic API Key</div>
+    <div class="api-row">
+      <input type="password" id="apiKey" placeholder="sk-ant-api03-…" autocomplete="off" spellcheck="false" />
+      <button class="toggle-vis" id="toggleVis" title="Show / hide key">👁</button>
+    </div>
+    <p class="api-hint">
+      Your key is never sent to any server except Anthropic's own API.
+      Get one at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>.
+    </p>
+  </div>
+
+  <!-- Step 2: Upload -->
+  <div class="card">
+    <div class="card-title"><span class="step-badge">2</span> Upload your contact list</div>
+
+    <div class="drop-zone" id="dropZone">
+      <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" />
+      <div class="drop-icon">📄</div>
+      <p><strong>Drag &amp; drop</strong> your CSV or Excel file here</p>
+      <p style="margin-top:4px">or click to browse</p>
+    </div>
+
+    <div class="file-info" id="fileInfo">
+      <span>✅</span>
+      <span id="fileInfoText"></span>
+    </div>
+
+    <div class="format-hint">
+      Expected columns (flexible naming accepted):
+      <code>Contact Name</code>
+      <code>LinkedIn ID</code>
+      <code>Email</code>
+      <code>Company Name</code>
+      <code>Company Website</code>
+      — order and exact capitalisation don't matter.
+    </div>
+  </div>
+
+  <!-- Step 3: Process -->
+  <div class="card" id="processCard" style="display:none">
+    <div class="card-title"><span class="step-badge">3</span> Generate personalisation</div>
+
+    <div class="action-bar">
+      <button class="btn btn-primary" id="processBtn" disabled>
+        ⚡ Generate for All Contacts
+      </button>
+      <button class="btn btn-outline" id="resetBtn" style="display:none">
+        ↺ Reset &amp; Start Over
+      </button>
+      <div class="concurrency-wrap">
+        <label for="concurrency">Parallel requests:</label>
+        <select id="concurrency">
+          <option value="1">1</option>
+          <option value="2" selected>2</option>
+          <option value="3">3</option>
+          <option value="5">5</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="progress-wrap" id="progressWrap">
+      <div class="progress-bar-bg"><div class="progress-bar" id="progressBar"></div></div>
+      <div class="progress-stats">
+        <span class="stat-done"  id="statDone">0 done</span>
+        <span class="stat-fail"  id="statFail">0 failed</span>
+        <span class="stat-pending" id="statPending">0 pending</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Results -->
+  <div class="results-section" id="resultsSection">
+    <div class="export-bar">
+      <button class="btn btn-green" id="exportBtn">⬇ Export CSV</button>
+      <button class="btn btn-outline btn-sm" id="copyAllBtn">📋 Copy All First Lines</button>
+      <span class="result-summary" id="resultSummary"></span>
+    </div>
+
+    <div class="table-wrap">
+      <table id="resultsTable">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th class="td-name">Contact</th>
+            <th class="td-company">Company</th>
+            <th class="td-line">Personalized First Line</th>
+            <th class="td-ps">P.S. Line</th>
+            <th class="td-status">Status</th>
+            <th class="td-actions">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="resultsBody">
+          <tr>
+            <td colspan="7">
+              <div class="empty-state">
+                <div class="empty-icon">🔍</div>
+                <p>Upload a file and hit "Generate" to see results here</p>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+let contacts = [];
+let isProcessing = false;
+
+// ── Utilities ──────────────────────────────────────────────────────────────
+function toast(msg, dur = 2800) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('visible');
+  setTimeout(() => el.classList.remove('visible'), dur);
+}
+
+function escHtml(s = '') {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function copyText(text, feedbackId) {
+  navigator.clipboard.writeText(text).then(() => {
+    const el = document.getElementById(feedbackId);
+    if (el) { el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 1800); }
+    toast('Copied to clipboard!');
+  });
+}
+
+function updateStats() {
+  const done    = contacts.filter(c => c.status === 'done').length;
+  const failed  = contacts.filter(c => c.status === 'error').length;
+  const pending = contacts.filter(c => c.status === 'pending' || c.status === 'running').length;
+  const total   = contacts.length;
+
+  document.getElementById('statDone').textContent    = `${done} done`;
+  document.getElementById('statFail').textContent    = `${failed} failed`;
+  document.getElementById('statPending').textContent = `${pending} remaining`;
+  document.getElementById('progressBar').style.width = total ? `${((done+failed)/total)*100}%` : '0%';
+  document.getElementById('resultSummary').textContent =
+    `${done} generated · ${failed} failed · ${total} total`;
+}
+
+// ── API Key toggle ─────────────────────────────────────────────────────────
+const apiKeyInput = document.getElementById('apiKey');
+document.getElementById('toggleVis').addEventListener('click', () => {
+  apiKeyInput.type = apiKeyInput.type === 'password' ? 'text' : 'password';
+});
+
+// Persist across page refreshes
+const savedKey = localStorage.getItem('ce_api_key');
+if (savedKey) apiKeyInput.value = savedKey;
+apiKeyInput.addEventListener('input', () => localStorage.setItem('ce_api_key', apiKeyInput.value.trim()));
+
+// ── File upload ────────────────────────────────────────────────────────────
+const dropZone  = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+
+dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', ()  => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  const file = e.dataTransfer.files[0];
+  if (file) handleFile(file);
+});
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) handleFile(fileInput.files[0]);
+});
+
+async function handleFile(file) {
+  const fd = new FormData();
+  fd.append('file', file);
+
+  try {
+    const res = await fetch('/api/parse-contacts', { method: 'POST', body: fd });
+    const json = await res.json();
+    if (!json.success) { toast('❌ ' + json.error); return; }
+
+    contacts = json.contacts.map(c => ({ ...c, status: 'pending', firstLine: '', psLine: '', error: '', websiteScraped: false, linkedinScraped: false }));
+
+    const infoEl = document.getElementById('fileInfo');
+    infoEl.classList.add('visible');
+    document.getElementById('fileInfoText').textContent = `${file.name} — ${contacts.length} contacts loaded`;
+
+    document.getElementById('processCard').style.display = 'block';
+    document.getElementById('processBtn').disabled = !apiKeyInput.value.trim();
+    document.getElementById('resultsSection').classList.add('visible');
+
+    renderTable();
+    updateStats();
+    toast(`✅ ${contacts.length} contacts parsed`);
+  } catch (err) {
+    toast('❌ Upload failed: ' + err.message);
+  }
+}
+
+// Enable process button as soon as both contacts and API key are ready
+apiKeyInput.addEventListener('input', () => {
+  document.getElementById('processBtn').disabled = !apiKeyInput.value.trim() || !contacts.length;
+});
+
+// ── Table rendering ────────────────────────────────────────────────────────
+function renderTable() {
+  const tbody = document.getElementById('resultsBody');
+
+  if (!contacts.length) {
+    tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">🔍</div><p>Upload a file and hit "Generate" to see results here</p></div></td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = contacts.map(c => {
+    let statusBadge = '';
+    if (c.status === 'pending')
+      statusBadge = `<span class="badge badge-pending">⏳ Pending</span>`;
+    else if (c.status === 'running')
+      statusBadge = `<span class="badge badge-running"><span class="dot-anim">Processing</span></span>`;
+    else if (c.status === 'done')
+      statusBadge = `<span class="badge badge-done">✓ Done</span>`;
+    else
+      statusBadge = `<span class="badge badge-error">✗ Error</span>`;
+
+    const scrapeInfo = c.status === 'done'
+      ? `<div class="scrape-icons">
+           <span class="${c.websiteScraped ? 'scrape-ok' : ''}">🌐${c.websiteScraped ? ' scraped' : ' unavailable'}</span>
+           &nbsp;
+           <span class="${c.linkedinScraped ? 'scrape-ok' : ''}">💼${c.linkedinScraped ? ' scraped' : ' unavailable'}</span>
+         </div>`
+      : '';
+
+    const errorNote = c.error ? `<div class="error-msg">${escHtml(c.error)}</div>` : '';
+
+    const firstLineCell = c.firstLine
+      ? `<div>${escHtml(c.firstLine)}</div>${scrapeInfo}`
+      : `<span style="color:var(--muted);font-style:italic">—</span>${errorNote}`;
+
+    const psCell = c.psLine
+      ? escHtml(c.psLine)
+      : `<span style="color:var(--muted);font-style:italic">—</span>`;
+
+    const actions = c.status === 'done'
+      ? `<button class="btn btn-outline btn-sm" onclick="copyText(${JSON.stringify(c.firstLine)},'cf${c.id}')">Copy line</button>
+         <span class="copy-feedback" id="cf${c.id}">✓</span>`
+      : '';
+
+    return `<tr id="row-${c.id}">
+      <td style="color:var(--muted)">${c.id}</td>
+      <td class="td-name">${escHtml(c.name)}<br><span style="font-size:11px;color:var(--muted)">${escHtml(c.email)}</span></td>
+      <td class="td-company">${escHtml(c.companyName)}</td>
+      <td class="td-line">${firstLineCell}</td>
+      <td class="td-ps">${psCell}</td>
+      <td class="td-status">${statusBadge}</td>
+      <td class="td-actions">${actions}</td>
+    </tr>`;
+  }).join('');
+}
+
+function updateRow(id) {
+  const c = contacts.find(x => x.id === id);
+  if (!c) return;
+  const row = document.getElementById(`row-${id}`);
+  if (!row) { renderTable(); return; }
+
+  let statusBadge = '';
+  if (c.status === 'pending')
+    statusBadge = `<span class="badge badge-pending">⏳ Pending</span>`;
+  else if (c.status === 'running')
+    statusBadge = `<span class="badge badge-running"><span class="dot-anim">Processing</span></span>`;
+  else if (c.status === 'done')
+    statusBadge = `<span class="badge badge-done">✓ Done</span>`;
+  else
+    statusBadge = `<span class="badge badge-error">✗ Error</span>`;
+
+  const scrapeInfo = c.status === 'done'
+    ? `<div class="scrape-icons">
+         <span class="${c.websiteScraped ? 'scrape-ok' : ''}">🌐${c.websiteScraped ? ' scraped' : ' unavailable'}</span>
+         &nbsp;
+         <span class="${c.linkedinScraped ? 'scrape-ok' : ''}">💼${c.linkedinScraped ? ' scraped' : ' unavailable'}</span>
+       </div>`
+    : '';
+
+  const errorNote = c.error ? `<div class="error-msg">${escHtml(c.error)}</div>` : '';
+
+  row.cells[3].innerHTML = c.firstLine
+    ? `<div>${escHtml(c.firstLine)}</div>${scrapeInfo}`
+    : `<span style="color:var(--muted);font-style:italic">—</span>${errorNote}`;
+
+  row.cells[4].innerHTML = c.psLine
+    ? escHtml(c.psLine)
+    : `<span style="color:var(--muted);font-style:italic">—</span>`;
+
+  row.cells[5].innerHTML = statusBadge;
+  row.cells[6].innerHTML = c.status === 'done'
+    ? `<button class="btn btn-outline btn-sm" onclick="copyText(${JSON.stringify(c.firstLine)},'cf${c.id}')">Copy line</button>
+       <span class="copy-feedback" id="cf${c.id}">✓</span>`
+    : '';
+}
+
+// ── Processing ─────────────────────────────────────────────────────────────
+document.getElementById('processBtn').addEventListener('click', startProcessing);
+
+async function startProcessing() {
+  const apiKey = apiKeyInput.value.trim();
+  if (!apiKey) { toast('Please enter your Anthropic API key first.'); return; }
+  if (!contacts.length) { toast('Please upload a contact list first.'); return; }
+
+  isProcessing = true;
+  document.getElementById('processBtn').disabled = true;
+  document.getElementById('resetBtn').style.display = 'none';
+  document.getElementById('progressWrap').classList.add('visible');
+
+  // Reset statuses
+  contacts.forEach(c => { c.status = 'pending'; c.firstLine = ''; c.psLine = ''; c.error = ''; });
+  renderTable();
+  updateStats();
+
+  const concurrency = parseInt(document.getElementById('concurrency').value, 10);
+  const queue = [...contacts];
+
+  async function worker() {
+    while (queue.length) {
+      const contact = queue.shift();
+      contact.status = 'running';
+      updateRow(contact.id);
+      updateStats();
+
+      try {
+        const res = await fetch('/api/generate-personalization', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ apiKey, contact }),
+        });
+        const json = await res.json();
+        if (json.success) {
+          contact.status = 'done';
+          contact.firstLine = json.firstLine;
+          contact.psLine = json.psLine;
+          contact.websiteScraped = json.websiteScraped;
+          contact.linkedinScraped = json.linkedinScraped;
+        } else {
+          contact.status = 'error';
+          contact.error = json.error || 'Unknown error';
+        }
+      } catch (err) {
+        contact.status = 'error';
+        contact.error = err.message;
+      }
+
+      updateRow(contact.id);
+      updateStats();
+    }
+  }
+
+  const workers = Array.from({ length: concurrency }, () => worker());
+  await Promise.all(workers);
+
+  isProcessing = false;
+  document.getElementById('processBtn').disabled = false;
+  document.getElementById('resetBtn').style.display = 'inline-flex';
+
+  const done   = contacts.filter(c => c.status === 'done').length;
+  const failed = contacts.filter(c => c.status === 'error').length;
+  toast(`✅ Done! ${done} generated, ${failed} failed.`);
+}
+
+// ── Reset ──────────────────────────────────────────────────────────────────
+document.getElementById('resetBtn').addEventListener('click', () => {
+  contacts = [];
+  document.getElementById('fileInfo').classList.remove('visible');
+  document.getElementById('fileInput').value = '';
+  document.getElementById('processCard').style.display = 'none';
+  document.getElementById('progressWrap').classList.remove('visible');
+  document.getElementById('resultsSection').classList.remove('visible');
+  document.getElementById('resetBtn').style.display = 'none';
+  document.getElementById('processBtn').disabled = true;
+  renderTable();
+  toast('Reset complete.');
+});
+
+// ── Copy all first lines ───────────────────────────────────────────────────
+document.getElementById('copyAllBtn').addEventListener('click', () => {
+  const lines = contacts.filter(c => c.firstLine).map(c => `${c.name} | ${c.firstLine}`).join('\n');
+  if (!lines) { toast('No lines to copy yet.'); return; }
+  navigator.clipboard.writeText(lines).then(() => toast('All first lines copied!'));
+});
+
+// ── Export CSV ─────────────────────────────────────────────────────────────
+document.getElementById('exportBtn').addEventListener('click', () => {
+  if (!contacts.length) { toast('Nothing to export yet.'); return; }
+
+  const headers = ['#', 'Name', 'Email', 'Company', 'Website', 'LinkedIn', 'First Line', 'PS Line', 'Status', 'Website Scraped', 'LinkedIn Scraped'];
+  const rows = contacts.map(c => [
+    c.id, c.name, c.email, c.companyName, c.website, c.linkedinId,
+    c.firstLine, c.psLine, c.status,
+    c.websiteScraped ? 'yes' : 'no',
+    c.linkedinScraped ? 'yes' : 'no',
+  ]);
+
+  const csv = [headers, ...rows].map(row =>
+    row.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')
+  ).join('\n');
+
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = `cold-email-personalization-${Date.now()}.csv`;
+  a.click(); URL.revokeObjectURL(url);
+  toast('CSV downloaded!');
+});
+</script>
+</body>
+</html>

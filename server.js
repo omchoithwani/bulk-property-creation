@@ -2,6 +2,10 @@ const express = require('express');
 const multer = require('multer');
 const { parse } = require('csv-parse/sync');
 const axios = require('axios');
+const path = require('path');
+const xlsx = require('xlsx');
+const cheerio = require('cheerio');
+const Anthropic = require('@anthropic-ai/sdk');
 
 const app = express();
 const upload = multer({
@@ -743,6 +747,250 @@ app.delete('/api/delete-property', async (req, res) => {
   } catch (err) {
     const msg = err.response?.data?.message || err.message;
     res.status(err.response?.status || 500).json({ success: false, error: msg });
+  }
+});
+
+// ── Cold-email personalisation tool ────────────────────────────────────────
+
+const contactsUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (!['.csv', '.xlsx', '.xls'].includes(ext)) {
+      return cb(new Error('Only CSV and Excel (.xlsx / .xls) files are allowed'));
+    }
+    cb(null, true);
+  },
+});
+
+/**
+ * POST /api/parse-contacts
+ * Accepts a CSV or Excel file, returns a normalised array of contacts.
+ * Accepts flexible column names (case-insensitive, ignores spaces/dashes/underscores).
+ */
+app.post('/api/parse-contacts', contactsUpload.single('file'), (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ success: false, error: 'No file uploaded.' });
+
+    const ext = path.extname(req.file.originalname).toLowerCase();
+    let rows;
+
+    if (ext === '.csv') {
+      rows = parse(req.file.buffer.toString('utf-8'), {
+        columns: true, skip_empty_lines: true, trim: true,
+      });
+    } else {
+      const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      rows = xlsx.utils.sheet_to_json(sheet, { defval: '' });
+    }
+
+    if (!rows.length) return res.status(400).json({ success: false, error: 'The file is empty.' });
+
+    // Flexible column finder: strips spaces/dashes/underscores then does a
+    // case-insensitive match against each of the provided candidate names.
+    function findCol(row, ...candidates) {
+      const keys = Object.keys(row);
+      for (const candidate of candidates) {
+        const norm = candidate.toLowerCase().replace(/[\s_\-]/g, '');
+        const key = keys.find(k => k.toLowerCase().replace(/[\s_\-]/g, '') === norm);
+        if (key !== undefined && String(row[key]).trim()) return String(row[key]).trim();
+      }
+      return '';
+    }
+
+    const contacts = rows.map((row, i) => ({
+      id: i + 1,
+      name:        findCol(row, 'Contact Name', 'Name', 'Full Name', 'First Name', 'Contact'),
+      linkedinId:  findCol(row, 'LinkedIn ID', 'LinkedIn', 'LinkedIn URL', 'LinkedIn Profile', 'LinkedIn ID/URL'),
+      email:       findCol(row, 'Email', 'Email Address', 'Email ID'),
+      companyName: findCol(row, 'Company Name', 'Company', 'Organization', 'Employer'),
+      website:     findCol(row, 'Company Website', 'Website', 'URL', 'Domain', 'Web'),
+      status: 'pending',
+    }));
+
+    res.json({ success: true, contacts, count: contacts.length });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * Fetches a URL and returns a cheerio-parsed object with key text signals.
+ * Fails silently – never throws.
+ */
+async function scrapeWebsite(rawUrl) {
+  if (!rawUrl || !rawUrl.trim()) return null;
+  let url = rawUrl.trim();
+  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+
+  try {
+    const { data } = await axios.get(url, {
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+      maxRedirects: 5,
+    });
+
+    const $ = cheerio.load(data);
+    $('script, style, nav, footer, header, noscript, iframe, svg').remove();
+
+    const title    = $('title').text().trim();
+    const metaDesc = ($('meta[name="description"]').attr('content') || $('meta[property="og:description"]').attr('content') || '').trim();
+    const h1       = $('h1').first().text().replace(/\s+/g, ' ').trim();
+    const h2s      = $('h2').map((_, el) => $(el).text().replace(/\s+/g, ' ').trim()).get().filter(Boolean).slice(0, 6).join(' | ');
+
+    // Grab the richest content block available
+    const mainText = ($('main, article, [class*="hero"], [class*="about"], [class*="intro"], [class*="value"]').text() || $('body').text())
+      .replace(/\s+/g, ' ').trim().slice(0, 2500);
+
+    return { url, title, metaDesc, h1, h2s, bodyText: mainText };
+  } catch {
+    return { url, error: true };
+  }
+}
+
+/**
+ * Best-effort LinkedIn public profile scrape.
+ * LinkedIn aggressively blocks bots, so we degrade gracefully.
+ */
+async function scrapeLinkedIn(rawId) {
+  if (!rawId || !rawId.trim()) return null;
+  let url = rawId.trim();
+  if (!/^https?:\/\//i.test(url)) {
+    const slug = url.replace(/^\/?(in\/)?/, '');
+    url = `https://www.linkedin.com/in/${slug}`;
+  }
+
+  try {
+    const { data } = await axios.get(url, {
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+      maxRedirects: 3,
+    });
+    const $ = cheerio.load(data);
+    const ogTitle = ($('meta[property="og:title"]').attr('content') || '').trim();
+    const ogDesc  = ($('meta[property="og:description"]').attr('content') || '').trim();
+    const metaDesc = ($('meta[name="description"]').attr('content') || '').trim();
+    // Extract slug as a fallback name hint
+    const slug = url.split('/in/').pop()?.split('?')[0]?.replace(/-/g, ' ') || '';
+    return { url, slug, ogTitle, ogDesc, metaDesc, blocked: false };
+  } catch {
+    const slug = url.split('/in/').pop()?.split('?')[0]?.replace(/-/g, ' ') || '';
+    return { url, slug, blocked: true };
+  }
+}
+
+/**
+ * POST /api/generate-personalization
+ * Body: { apiKey, contact: { name, linkedinId, email, companyName, website } }
+ * Scrapes website + LinkedIn, then calls Claude to produce a personalised
+ * first line and P.S. for a cold email.
+ */
+app.post('/api/generate-personalization', async (req, res) => {
+  const { apiKey, contact } = req.body;
+  if (!apiKey)   return res.status(400).json({ success: false, error: 'Anthropic API key is required.' });
+  if (!contact)  return res.status(400).json({ success: false, error: 'Contact data is required.' });
+
+  // Scrape in parallel
+  const [websiteData, linkedinData] = await Promise.all([
+    scrapeWebsite(contact.website),
+    scrapeLinkedIn(contact.linkedinId),
+  ]);
+
+  // Build a rich context string for Claude
+  const lines = [];
+  lines.push(`Contact Name: ${contact.name || '(unknown)'}`);
+  lines.push(`Company: ${contact.companyName || '(unknown)'}`);
+
+  if (websiteData && !websiteData.error) {
+    lines.push('');
+    lines.push('=== COMPANY WEBSITE ===');
+    if (websiteData.title)    lines.push(`Title: ${websiteData.title}`);
+    if (websiteData.metaDesc) lines.push(`Description: ${websiteData.metaDesc}`);
+    if (websiteData.h1)       lines.push(`H1: ${websiteData.h1}`);
+    if (websiteData.h2s)      lines.push(`Sub-headings: ${websiteData.h2s}`);
+    if (websiteData.bodyText) lines.push(`Page content:\n${websiteData.bodyText}`);
+  }
+
+  if (linkedinData) {
+    lines.push('');
+    lines.push('=== LINKEDIN ===');
+    if (!linkedinData.blocked) {
+      if (linkedinData.ogTitle)  lines.push(`Title: ${linkedinData.ogTitle}`);
+      if (linkedinData.ogDesc)   lines.push(`About: ${linkedinData.ogDesc}`);
+      if (linkedinData.metaDesc) lines.push(`Meta: ${linkedinData.metaDesc}`);
+    }
+    if (linkedinData.slug) lines.push(`Profile slug (name hint): ${linkedinData.slug}`);
+  }
+
+  const context = lines.join('\n');
+
+  try {
+    const client = new Anthropic({ apiKey });
+
+    const message = await client.messages.create({
+      model: 'claude-opus-4-6',
+      max_tokens: 500,
+      messages: [
+        {
+          role: 'user',
+          content: `You are a world-class cold email copywriter who specialises in hyper-personalised outreach for email marketing and cold email system-building services.
+
+Using the research below, write exactly two things:
+
+1. FIRST LINE — the very first sentence of a cold email. Rules:
+   - Must cite something specific and concrete from their website or LinkedIn (a product, service, niche, achievement, positioning, recent campaign, etc.)
+   - Reads like a genuine observation, never flattery or filler
+   - One or two sentences, conversational, punchy
+   - Do NOT mention the sender's service yet — this line is purely about THEM
+   - Do NOT start with "I" or "We"
+
+2. P.S. LINE — a single P.S. at the bottom of the email. Rules:
+   - References something personal, professional, or quirky about the person or their company
+   - Feels like a genuine aside, not a pitch
+   - Starts with "P.S."
+
+Research:
+${context}
+
+Respond with ONLY valid JSON in this exact shape — no markdown, no commentary:
+{"firstLine":"...","psLine":"P.S. ..."}`,
+        },
+      ],
+    });
+
+    let parsed;
+    try {
+      parsed = JSON.parse(message.content[0].text.trim());
+    } catch {
+      // Claude occasionally wraps JSON in a code block
+      const match = message.content[0].text.match(/\{[\s\S]*\}/);
+      parsed = match ? JSON.parse(match[0]) : null;
+    }
+
+    if (!parsed?.firstLine) {
+      return res.status(500).json({ success: false, error: 'Claude returned an unexpected response format.' });
+    }
+
+    res.json({
+      success: true,
+      firstLine: parsed.firstLine,
+      psLine: parsed.psLine,
+      websiteScraped: !!(websiteData && !websiteData.error),
+      linkedinScraped: !!(linkedinData && !linkedinData.blocked),
+    });
+  } catch (err) {
+    const msg = err?.error?.message || err?.message || 'Unknown error';
+    res.status(500).json({ success: false, error: msg });
   }
 });
 
