@@ -1,7 +1,10 @@
+require('dotenv').config();
+
 const express = require('express');
 const multer = require('multer');
 const { parse } = require('csv-parse/sync');
 const axios = require('axios');
+const session = require('express-session');
 
 const app = express();
 const upload = multer({
@@ -15,8 +18,83 @@ const upload = multer({
   },
 });
 
+// ── OAuth config ────────────────────────────────────────────────────────────
+
+const CLIENT_ID     = process.env.HUBSPOT_CLIENT_ID;
+const CLIENT_SECRET = process.env.HUBSPOT_CLIENT_SECRET;
+const REDIRECT_URI  = process.env.HUBSPOT_REDIRECT_URI || 'http://localhost:3000/oauth/callback';
+
+const SCOPES = [
+  'crm.schemas.read',
+  'crm.schemas.write',
+  'crm.objects.contacts.read',
+  'automation',
+  'forms',
+  'crm.lists.read',
+  'reports',
+  'content',
+  'crm.schemas.custom.read',
+].join(' ');
+
+// ── Middleware ──────────────────────────────────────────────────────────────
+
 app.use(express.json());
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'hubspot-property-tool-secret',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    // In production (HTTPS) cookies should be secure; locally they work without it
+    secure: process.env.NODE_ENV === 'production',
+    httpOnly: true,
+    maxAge: 8 * 60 * 60 * 1000, // 8 hours — matches HubSpot token lifetime
+  },
+}));
 app.use(express.static('public'));
+
+// ── Session token helper ────────────────────────────────────────────────────
+
+/**
+ * Returns a valid access token from the session.
+ * Automatically refreshes the token if it is within 5 minutes of expiry.
+ * Throws a 401 error if the session has no token at all.
+ */
+async function getValidToken(req) {
+  if (!req.session?.accessToken) {
+    const err = new Error('Not connected. Please connect your HubSpot account.');
+    err.statusCode = 401;
+    throw err;
+  }
+
+  // Refresh if the token expires within the next 5 minutes
+  if (
+    req.session.expiresAt &&
+    Date.now() > req.session.expiresAt - 5 * 60 * 1000
+  ) {
+    if (!req.session.refreshToken || !CLIENT_SECRET) {
+      const err = new Error('Session expired. Please reconnect your HubSpot account.');
+      err.statusCode = 401;
+      throw err;
+    }
+
+    const tokenRes = await axios.post(
+      'https://api.hubapi.com/oauth/v1/token',
+      new URLSearchParams({
+        grant_type:    'refresh_token',
+        client_id:     CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+        refresh_token: req.session.refreshToken,
+      }).toString(),
+      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+    );
+
+    req.session.accessToken  = tokenRes.data.access_token;
+    req.session.refreshToken = tokenRes.data.refresh_token;
+    req.session.expiresAt    = Date.now() + tokenRes.data.expires_in * 1000;
+  }
+
+  return req.session.accessToken;
+}
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -48,63 +126,47 @@ const DEFAULT_GROUPS = {
   products:  'productinformation',
 };
 
-// Standard CRM objects shown in the UI by default (no API call needed).
-// These are built-in HubSpot object types that are never returned by the
-// custom-schemas endpoint (/crm/v3/schemas), so they must be listed here.
 const STANDARD_OBJECTS = [
-  { value: 'contacts',   label: 'Contacts' },
-  { value: 'companies',  label: 'Companies' },
-  { value: 'deals',      label: 'Deals' },
-  { value: 'tickets',    label: 'Tickets' },
-  { value: 'products',   label: 'Products' },
-  { value: 'line_items', label: 'Line Items' },
-  { value: 'quotes',     label: 'Quotes' },
-  { value: 'calls',      label: 'Calls' },
-  { value: 'emails',     label: 'Emails' },
-  { value: 'meetings',   label: 'Meetings' },
-  { value: 'notes',      label: 'Notes' },
-  { value: 'tasks',      label: 'Tasks' },
-  { value: 'communications', label: 'Communications' },
-  { value: 'feedback_submissions', label: 'Feedback Submissions' },
-  { value: 'leads',      label: 'Leads' },
+  { value: 'contacts',              label: 'Contacts' },
+  { value: 'companies',             label: 'Companies' },
+  { value: 'deals',                 label: 'Deals' },
+  { value: 'tickets',               label: 'Tickets' },
+  { value: 'products',              label: 'Products' },
+  { value: 'line_items',            label: 'Line Items' },
+  { value: 'quotes',                label: 'Quotes' },
+  { value: 'calls',                 label: 'Calls' },
+  { value: 'emails',                label: 'Emails' },
+  { value: 'meetings',              label: 'Meetings' },
+  { value: 'notes',                 label: 'Notes' },
+  { value: 'tasks',                 label: 'Tasks' },
+  { value: 'communications',        label: 'Communications' },
+  { value: 'feedback_submissions',  label: 'Feedback Submissions' },
+  { value: 'leads',                 label: 'Leads' },
 ];
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-/**
- * Converts a display label to a valid HubSpot internal property name.
- * Rules: lowercase, only a-z / 0-9 / underscore, must start with a letter.
- */
 function toInternalName(label) {
   let name = label
     .toLowerCase()
     .trim()
     .replace(/\s+/g, '_')
     .replace(/[^a-z0-9_]/g, '');
-
-  // HubSpot names must start with a letter
   if (/^[0-9]/.test(name)) name = 'p_' + name;
-
-  return name.slice(0, 250); // HubSpot max length
+  return name.slice(0, 250);
 }
 
 /**
- * Returns the property group name to use when creating a property.
- *
- * Strategy (in order):
- *  1. Known standard-object group (instant, no API call).
- *  2. Groups API  GET /crm/v3/properties/groups/{objectType}  — prefers the
- *     first non-HubSpot-defined group (the object's own default group).
- *  3. Inspect existing properties  GET /crm/v3/properties/{objectType}  and
- *     use the most frequent groupName found there.  This works even when the
- *     groups endpoint fails and covers any object that already has properties.
- *  4. Throw — so the caller gets a real error instead of silently sending an
- *     invalid group name to HubSpot.
+ * Resolves the correct property group name for an object type.
+ * Strategy:
+ *  1. Known default group (instant)
+ *  2. Groups API (first non-HubSpot-defined group)
+ *  3. Most-used group from existing properties
+ *  4. Throw
  */
 async function resolveGroupName(token, objectType) {
   if (DEFAULT_GROUPS[objectType]) return DEFAULT_GROUPS[objectType];
 
-  // ── 2. Groups API ──────────────────────────────────────────────────────────
   try {
     const res = await axios.get(
       `https://api.hubapi.com/crm/v3/properties/groups/${objectType}`,
@@ -115,7 +177,6 @@ async function resolveGroupName(token, objectType) {
     if (preferred?.name) return preferred.name;
   } catch { /* fall through */ }
 
-  // ── 3. Extract group from existing properties ──────────────────────────────
   try {
     const res = await axios.get(
       `https://api.hubapi.com/crm/v3/properties/${objectType}`,
@@ -129,16 +190,12 @@ async function resolveGroupName(token, objectType) {
     if (top?.[0]) return top[0];
   } catch { /* fall through */ }
 
-  // ── 4. Give up with a clear error ─────────────────────────────────────────
   throw new Error(
     `Cannot determine a valid property group for object type "${objectType}". ` +
-    `Ensure the token has crm.schemas.custom.read scope, or that the object already has at least one property.`
+    `Ensure the app has crm.schemas.custom.read scope, or that the object already has at least one property.`
   );
 }
 
-/**
- * Builds the HubSpot options array from a semicolon-separated string.
- */
 function parseOptions(optionsStr) {
   if (!optionsStr || !optionsStr.trim()) return [];
   return optionsStr
@@ -153,11 +210,103 @@ function parseOptions(optionsStr) {
     }));
 }
 
-// ── Routes ─────────────────────────────────────────────────────────────────
+// ── OAuth routes ────────────────────────────────────────────────────────────
+
+/**
+ * GET /oauth/authorize
+ * Redirects the browser to HubSpot's OAuth consent screen.
+ */
+app.get('/oauth/authorize', (req, res) => {
+  if (!CLIENT_ID) {
+    return res.status(500).send(
+      'HUBSPOT_CLIENT_ID is not set. Add it to your environment variables.'
+    );
+  }
+  const url =
+    `https://app.hubspot.com/oauth/authorize` +
+    `?client_id=${encodeURIComponent(CLIENT_ID)}` +
+    `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
+    `&scope=${encodeURIComponent(SCOPES)}`;
+  res.redirect(url);
+});
+
+/**
+ * GET /oauth/callback
+ * HubSpot redirects here after the user grants (or denies) access.
+ * Exchanges the auth code for access + refresh tokens and stores them in the session.
+ */
+app.get('/oauth/callback', async (req, res) => {
+  const { code, error, error_description } = req.query;
+
+  if (error || !code) {
+    const msg = error_description || error || 'Authorization was denied.';
+    return res.redirect(`/?auth_error=${encodeURIComponent(msg)}`);
+  }
+
+  try {
+    const tokenRes = await axios.post(
+      'https://api.hubapi.com/oauth/v1/token',
+      new URLSearchParams({
+        grant_type:    'authorization_code',
+        client_id:     CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+        redirect_uri:  REDIRECT_URI,
+        code,
+      }).toString(),
+      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+    );
+
+    req.session.accessToken  = tokenRes.data.access_token;
+    req.session.refreshToken = tokenRes.data.refresh_token;
+    req.session.expiresAt    = Date.now() + tokenRes.data.expires_in * 1000;
+
+    // Fetch portal info (best-effort — not fatal if it fails)
+    try {
+      const infoRes = await axios.get(
+        `https://api.hubapi.com/oauth/v1/access-tokens/${tokenRes.data.access_token}`
+      );
+      req.session.portalId  = infoRes.data.hub_id;
+      req.session.hubDomain = infoRes.data.hub_domain;
+    } catch { /* portal info is non-critical */ }
+
+    res.redirect('/');
+  } catch (err) {
+    const msg = err.response?.data?.message || err.message;
+    res.redirect(`/?auth_error=${encodeURIComponent(msg)}`);
+  }
+});
+
+/**
+ * GET /oauth/status
+ * Returns whether the current session has a valid connection and portal info.
+ */
+app.get('/oauth/status', (req, res) => {
+  if (req.session?.accessToken) {
+    res.json({
+      connected: true,
+      portalId:  req.session.portalId  || null,
+      hubDomain: req.session.hubDomain || null,
+    });
+  } else {
+    res.json({ connected: false });
+  }
+});
+
+/**
+ * POST /oauth/disconnect
+ * Destroys the session, effectively logging the user out.
+ */
+app.post('/oauth/disconnect', (req, res) => {
+  req.session.destroy((err) => {
+    res.json({ success: !err });
+  });
+});
+
+// ── API routes ─────────────────────────────────────────────────────────────
 
 /**
  * POST /api/parse-csv
- * Accepts a multipart CSV upload, validates columns and types, returns parsed rows.
+ * No auth required — only parses and validates the uploaded file.
  */
 app.post('/api/parse-csv', upload.single('file'), (req, res) => {
   try {
@@ -175,7 +324,6 @@ app.post('/api/parse-csv', upload.single('file'), (req, res) => {
       return res.status(400).json({ success: false, errors: ['The CSV file is empty.'] });
     }
 
-    // Validate header columns
     const headers = Object.keys(records[0]).map((h) => h.trim());
     if (!headers.includes('Name') || !headers.includes('Type')) {
       return res.status(400).json({
@@ -184,27 +332,19 @@ app.post('/api/parse-csv', upload.single('file'), (req, res) => {
       });
     }
 
-    // Validate each row
     const errors = [];
     records.forEach((row, i) => {
-      const rowNum = i + 2; // +2 because row 1 is the header
-      if (!row.Name || !row.Name.trim()) {
-        errors.push(`Row ${rowNum}: Name is required`);
-      }
+      const rowNum = i + 2;
+      if (!row.Name || !row.Name.trim()) errors.push(`Row ${rowNum}: Name is required`);
       if (!row.Type || !row.Type.trim()) {
         errors.push(`Row ${rowNum}: Type is required`);
       } else if (!PROPERTY_TYPES[row.Type.trim()]) {
-        errors.push(
-          `Row ${rowNum}: Invalid type "${row.Type}". Must be one of: ${VALID_TYPES.join(', ')}`
-        );
+        errors.push(`Row ${rowNum}: Invalid type "${row.Type}". Must be one of: ${VALID_TYPES.join(', ')}`);
       }
     });
 
-    if (errors.length) {
-      return res.status(400).json({ success: false, errors });
-    }
+    if (errors.length) return res.status(400).json({ success: false, errors });
 
-    // Normalise rows before returning
     const data = records.map((row) => ({
       Name:        row.Name.trim(),
       Type:        row.Type.trim(),
@@ -220,13 +360,12 @@ app.post('/api/parse-csv', upload.single('file'), (req, res) => {
 
 /**
  * POST /api/create-property
- * Creates a single HubSpot property.
- * Body: { token, objectType, property: { Name, Type, Description, Options } }
+ * Body: { objectType, property: { Name, Type, Description, Options }, defaultGroup? }
  */
 app.post('/api/create-property', async (req, res) => {
-  const { token, objectType, property, defaultGroup } = req.body;
+  const { objectType, property, defaultGroup } = req.body;
 
-  if (!token || !objectType || !property) {
+  if (!objectType || !property) {
     return res.status(400).json({ success: false, error: 'Missing required fields.' });
   }
 
@@ -236,11 +375,7 @@ app.post('/api/create-property', async (req, res) => {
   }
 
   try {
-    // Use the group name provided by the caller (resolved at object-type load time)
-    // and only fall back to the dynamic lookup if it was not supplied.
-    // IMPORTANT: resolveGroupName can throw — keep it inside the try so the
-    // catch below converts any failure into a proper JSON error response instead
-    // of dropping the connection (which shows as "Failed to fetch" in the UI).
+    const token = await getValidToken(req);
     const groupName = defaultGroup || await resolveGroupName(token, objectType);
     const internalName = toInternalName(property.Name);
 
@@ -251,47 +386,25 @@ app.post('/api/create-property', async (req, res) => {
       fieldType:   typeInfo.fieldType,
       groupName,
       description: property.Description || '',
-      // Only enumeration types use options — sending options for other types causes API errors
       ...(typeInfo.enumeration ? { options: parseOptions(property.Options) } : {}),
     };
 
     const response = await axios.post(
       `https://api.hubapi.com/crm/v3/properties/${objectType}`,
       body,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      }
+      { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
     );
 
-    res.json({
-      success:      true,
-      internalName: response.data.name,
-      label:        response.data.label,
-    });
+    res.json({ success: true, internalName: response.data.name, label: response.data.label });
   } catch (err) {
-    const hsError = err.response?.data;
-    const message =
-      hsError?.message ||
-      (hsError?.errors?.[0]?.message) ||
-      err.message ||
-      'Unknown error';
-
-    res.status(err.response?.status || 500).json({ success: false, error: message });
+    const status = err.statusCode || err.response?.status || 500;
+    const message = err.response?.data?.message || err.response?.data?.errors?.[0]?.message || err.message || 'Unknown error';
+    res.status(status).json({ success: false, error: message });
   }
 });
 
 // ── Manage-properties helpers ───────────────────────────────────────────────
 
-/**
- * Follow HubSpot cursor pagination, collecting every item.
- * @param {string} token  Bearer token
- * @param {string} url    API URL (no query string)
- * @param {string} key    Key in the response body that holds the array
- * @param {object} extra  Extra query params
- */
 async function paginateHubSpot(token, url, key, extra = {}) {
   const items = [];
   let after = null;
@@ -307,35 +420,14 @@ async function paginateHubSpot(token, url, key, extra = {}) {
   return items;
 }
 
-/**
- * Shared regex scan: extracts property internal names from a JSON-stringified object.
- *
- * Catches ANY JSON key whose name ends in "Property" or "PropertyName"
- * (case-insensitive on the suffix), e.g.:
- *   property, propertyName, filterProperty, targetProperty, sourceProperty,
- *   fromPropertyName, toPropertyName, sourcePropertyName, targetPropertyName,
- *   associatedProperty, actionPropertyName, …
- *
- * Value is constrained to look like a HubSpot internal name:
- *   starts with a-z, followed by a-z / 0-9 / _ only.
- * This avoids false-positives on things like "propertyType":"ENUMERATION".
- */
 function extractPropNamesFromJson(str) {
   const names = new Set();
-  // Key: anything + "Property" optionally + "Name"  (both casings)
-  // Value: must look like a HubSpot internal property name (lowercase snake_case)
   const re = /"[a-zA-Z]*[Pp]roperty(?:[Nn]ame)?"\s*:\s*"([a-z][a-z0-9_]*)"/g;
   let m;
   while ((m = re.exec(str)) !== null) names.add(m[1]);
   return names;
 }
 
-/**
- * Scan any HubSpot object for property references using two strategies:
- *  1. JSON key scan   — catches "propertyName":"foo", "targetProperty":"foo", etc.
- *  2. Token scan      — catches {{contact.foo}} personalization tokens in text fields
- * Used by both workflow and email scanners.
- */
 function extractPropsFromJsonWithTokens(obj) {
   const str = JSON.stringify(obj);
   const names = extractPropNamesFromJson(str);
@@ -345,77 +437,29 @@ function extractPropsFromJsonWithTokens(obj) {
   return names;
 }
 
-/**
- * Scan a single workflow object for HubSpot property name references.
- */
-function extractWorkflowProps(workflow) {
-  return extractPropsFromJsonWithTokens(workflow);
-}
+function extractWorkflowProps(workflow)   { return extractPropsFromJsonWithTokens(workflow); }
+function extractEmailProps(email)         { return extractPropsFromJsonWithTokens(email); }
+function extractListProps(list)           { return extractPropNamesFromJson(JSON.stringify(list)); }
+function extractPipelineProps(pipeline)   { return extractPropNamesFromJson(JSON.stringify(pipeline)); }
+function extractReportProps(report)       { return extractPropNamesFromJson(JSON.stringify(report)); }
 
-/**
- * Scan a HubSpot marketing email object for property references.
- * Catches {{contact.my_property}} tokens in subject, htmlBody, plainTextBody, etc.
- */
-function extractEmailProps(email) {
-  return extractPropsFromJsonWithTokens(email);
-}
-
-/**
- * Scan a HubSpot list object for referenced property names.
- * List filter branches use "property":"propName" in their filter conditions.
- */
-function extractListProps(list) {
-  return extractPropNamesFromJson(JSON.stringify(list));
-}
-
-/**
- * Scan a HubSpot pipeline object for referenced property names.
- * Catches any property references in stage metadata / required properties.
- */
-function extractPipelineProps(pipeline) {
-  return extractPropNamesFromJson(JSON.stringify(pipeline));
-}
-
-/**
- * Scan a HubSpot report object for referenced property names.
- */
-function extractReportProps(report) {
-  return extractPropNamesFromJson(JSON.stringify(report));
-}
-
-/**
- * Scan a HubSpot form object (v3 or legacy) for referenced property names.
- */
 function extractFormProps(form) {
   const names = new Set();
 
-  // Recursively scan a list of field objects.
   function scanFields(fields) {
     for (const field of (fields || [])) {
       if (field.name) names.add(field.name);
-
-      // v3 forms: conditional fields live at
-      //   field.dependentFields[].dependentFieldFilters[].dependentFormField
-      // (NOT dep.fields — that path doesn't exist in the v3 response)
       for (const dep of (field.dependentFields || [])) {
         for (const filter of (dep.dependentFieldFilters || [])) {
-          if (filter.dependentFormField) {
-            scanFields([filter.dependentFormField]); // recurse for further nesting
-          }
+          if (filter.dependentFormField) scanFields([filter.dependentFormField]);
         }
-        // legacy fallback: dep.fields[] (old embedded-forms structure)
         scanFields(dep.fields);
       }
     }
   }
 
-  // v3 forms: fieldGroups[].fields[]
-  for (const group of (form.fieldGroups || [])) {
-    scanFields(group.fields);
-  }
+  for (const group of (form.fieldGroups || [])) scanFields(group.fields);
 
-  // legacy v2 forms: formFields can be a flat array OR an array-of-row-arrays
-  //   [[field1, field2], [field3]]  ← rows
   const legacyFields = form.formFields;
   if (Array.isArray(legacyFields)) {
     if (legacyFields.length > 0 && Array.isArray(legacyFields[0])) {
@@ -428,26 +472,18 @@ function extractFormProps(form) {
   return names;
 }
 
-// ── Manage-properties routes ────────────────────────────────────────────────
+// ── Manage routes ───────────────────────────────────────────────────────────
 
 /**
- * GET /api/list-object-types?token=
- * Returns standard CRM objects plus any custom objects in the portal
- * (fetched from GET /crm/v3/schemas — requires crm.schemas.custom.read scope).
- * Each custom object entry includes a `defaultGroup` so callers can pass it
- * directly to create-property without an extra round-trip.
- * If the schemas call fails (missing scope, network, etc.) the standard objects
- * are still returned; a non-fatal warning is included in the response.
+ * GET /api/list-object-types
  */
 app.get('/api/list-object-types', async (req, res) => {
-  const { token } = req.query;
-  if (!token) return res.status(400).json({ success: false, error: 'token is required.' });
-
   let customObjects = [];
   let warning = null;
 
   try {
-    // The schemas endpoint is paginated — collect all pages before processing.
+    const token = await getValidToken(req);
+
     const allSchemas = [];
     let after = undefined;
     do {
@@ -459,8 +495,6 @@ app.get('/api/list-object-types', async (req, res) => {
       after = schemasRes.data.paging?.next?.after;
     } while (after);
 
-    // Fetch the property groups for each custom object in parallel so we know
-    // the correct defaultGroup to use when creating properties later.
     customObjects = await Promise.all(
       allSchemas.map(async schema => {
         let defaultGroup = null;
@@ -470,73 +504,57 @@ app.get('/api/list-object-types', async (req, res) => {
             { headers: { Authorization: `Bearer ${token}` } }
           );
           const groups = groupsRes.data.results || [];
-          // Prefer a group that belongs to the object itself (hubspotDefined=false)
           const preferred = groups.find(g => !g.hubspotDefined) || groups[0];
           defaultGroup = preferred?.name || null;
-        } catch { /* defaultGroup stays null; create-property will handle it */ }
-        // objectTypeId can be absent on some app-managed objects; fall back to
-        // fullyQualifiedName then name so the entry is still usable.
+        } catch { /* defaultGroup stays null */ }
         const value = schema.objectTypeId || schema.fullyQualifiedName || schema.name;
         const label = schema.labels?.plural || schema.labels?.singular || schema.name || value;
-        if (!value) return null; // skip entirely unusable schemas
+        if (!value) return null;
         return { value, label, defaultGroup };
       })
     );
-    // Remove null entries (schemas with no usable identifier)
     customObjects = customObjects.filter(Boolean);
   } catch (err) {
+    if (err.statusCode === 401) {
+      return res.status(401).json({ success: false, error: err.message, unauthenticated: true });
+    }
     warning = `Custom objects could not be loaded: ${err.response?.data?.message || err.message}`;
   }
 
-  res.json({
-    success:     true,
-    objectTypes: [...STANDARD_OBJECTS, ...customObjects],
-    warning,
-  });
+  res.json({ success: true, objectTypes: [...STANDARD_OBJECTS, ...customObjects], warning });
 });
 
 /**
- * GET /api/list-properties?token=&objectType=
- * Returns all non-archived properties for the given object type.
+ * GET /api/list-properties?objectType=
  */
 app.get('/api/list-properties', async (req, res) => {
-  const { token, objectType } = req.query;
-  if (!token || !objectType) {
-    return res.status(400).json({ success: false, error: 'token and objectType are required.' });
+  const { objectType } = req.query;
+  if (!objectType) {
+    return res.status(400).json({ success: false, error: 'objectType is required.' });
   }
   try {
-    // Properties API returns everything in one page (no cursor pagination)
+    const token = await getValidToken(req);
     const response = await axios.get(
       `https://api.hubapi.com/crm/v3/properties/${objectType}`,
-      {
-        headers: { Authorization: `Bearer ${token}` },
-        params: { archived: false },
-      }
+      { headers: { Authorization: `Bearer ${token}` }, params: { archived: false } }
     );
     const properties = (response.data.results || [])
       .sort((a, b) => (a.label || a.name).localeCompare(b.label || b.name));
     res.json({ success: true, properties, count: properties.length });
   } catch (err) {
+    const status = err.statusCode || err.response?.status || 500;
     const msg = err.response?.data?.message || err.message;
-    res.status(err.response?.status || 500).json({ success: false, error: msg });
+    res.status(status).json({ success: false, error: msg, unauthenticated: status === 401 });
   }
 });
 
 /**
  * POST /api/fetch-usage-context
- * Body: { token, objectType }
- * Fetches workflows, forms, lists, pipelines, reports, and marketing emails, then
- * returns property names referenced in each source.
- * Errors on any source are non-fatal — returned as warning messages.
  */
 app.post('/api/fetch-usage-context', async (req, res) => {
-  const { token } = req.body;
-  if (!token) return res.status(400).json({ success: false, error: 'token is required.' });
-
   const warnings = [];
-
-  // propName -> { workflows: string[], forms: string[], lists: string[], pipelines: string[], reports: string[] }
   const usageDetails = {};
+
   function addUsage(propName, type, sourceName) {
     if (!usageDetails[propName]) usageDetails[propName] = {};
     if (!usageDetails[propName][type]) usageDetails[propName][type] = [];
@@ -545,73 +563,44 @@ app.post('/api/fetch-usage-context', async (req, res) => {
     }
   }
 
-  // ── Workflows (v3 automation API) ──
-  let workflowProps = new Set();
-  let workflowCount = 0;
+  let token;
   try {
-    const workflows = await paginateHubSpot(
-      token,
-      'https://api.hubapi.com/automation/v3/workflows',
-      'workflows'
-    );
+    token = await getValidToken(req);
+  } catch (err) {
+    return res.status(err.statusCode || 401).json({ success: false, error: err.message, unauthenticated: true });
+  }
+
+  let workflowProps = new Set(), workflowCount = 0;
+  try {
+    const workflows = await paginateHubSpot(token, 'https://api.hubapi.com/automation/v3/workflows', 'workflows');
     workflowCount = workflows.length;
     for (const wf of workflows) {
       const wfName = wf.name || `Workflow ${wf.id || ''}`.trim();
-      for (const name of extractWorkflowProps(wf)) {
-        workflowProps.add(name);
-        addUsage(name, 'workflows', wfName);
-      }
+      for (const name of extractWorkflowProps(wf)) { workflowProps.add(name); addUsage(name, 'workflows', wfName); }
     }
-  } catch (err) {
-    warnings.push(`Workflows: ${err.response?.data?.message || err.message}`);
-  }
+  } catch (err) { warnings.push(`Workflows: ${err.response?.data?.message || err.message}`); }
 
-  // ── Forms (marketing v3 API) ──
-  let formProps = new Set();
-  let formCount = 0;
+  let formProps = new Set(), formCount = 0;
   try {
-    const forms = await paginateHubSpot(
-      token,
-      'https://api.hubapi.com/marketing/v3/forms',
-      'results'
-    );
+    const forms = await paginateHubSpot(token, 'https://api.hubapi.com/marketing/v3/forms', 'results');
     formCount = forms.length;
     for (const f of forms) {
       const formName = f.name || f.id || 'Unnamed Form';
-      for (const name of extractFormProps(f)) {
-        formProps.add(name);
-        addUsage(name, 'forms', formName);
-      }
+      for (const name of extractFormProps(f)) { formProps.add(name); addUsage(name, 'forms', formName); }
     }
-  } catch (err) {
-    warnings.push(`Forms: ${err.response?.data?.message || err.message}`);
-  }
+  } catch (err) { warnings.push(`Forms: ${err.response?.data?.message || err.message}`); }
 
-  // ── Lists (CRM v3 lists API) ──
-  let listProps = new Set();
-  let listCount = 0;
+  let listProps = new Set(), listCount = 0;
   try {
-    const lists = await paginateHubSpot(
-      token,
-      'https://api.hubapi.com/crm/v3/lists',
-      'lists',
-      { includeFilters: true }
-    );
+    const lists = await paginateHubSpot(token, 'https://api.hubapi.com/crm/v3/lists', 'lists', { includeFilters: true });
     listCount = lists.length;
     for (const list of lists) {
       const listName = list.name || list.listId || 'Unnamed List';
-      for (const name of extractListProps(list)) {
-        listProps.add(name);
-        addUsage(name, 'lists', listName);
-      }
+      for (const name of extractListProps(list)) { listProps.add(name); addUsage(name, 'lists', listName); }
     }
-  } catch (err) {
-    warnings.push(`Lists: ${err.response?.data?.message || err.message}`);
-  }
+  } catch (err) { warnings.push(`Lists: ${err.response?.data?.message || err.message}`); }
 
-  // ── Pipelines (CRM v3 — deals + tickets only) ──
-  let pipelineProps = new Set();
-  let pipelineCount = 0;
+  let pipelineProps = new Set(), pipelineCount = 0;
   try {
     for (const pipelineObj of ['deals', 'tickets']) {
       const res = await axios.get(
@@ -622,92 +611,60 @@ app.post('/api/fetch-usage-context', async (req, res) => {
       pipelineCount += pipelines.length;
       for (const pipeline of pipelines) {
         const pipelineName = pipeline.label || pipeline.id || 'Unnamed Pipeline';
-        for (const name of extractPipelineProps(pipeline)) {
-          pipelineProps.add(name);
-          addUsage(name, 'pipelines', pipelineName);
-        }
+        for (const name of extractPipelineProps(pipeline)) { pipelineProps.add(name); addUsage(name, 'pipelines', pipelineName); }
       }
     }
-  } catch (err) {
-    warnings.push(`Pipelines: ${err.response?.data?.message || err.message}`);
-  }
+  } catch (err) { warnings.push(`Pipelines: ${err.response?.data?.message || err.message}`); }
 
-  // ── Marketing emails (marketing v3 API) ──
-  // Catches {{contact.property}} personalization tokens in subject lines and body HTML.
-  let emailProps = new Set();
-  let emailCount = 0;
+  let emailProps = new Set(), emailCount = 0;
   try {
-    const emails = await paginateHubSpot(
-      token,
-      'https://api.hubapi.com/marketing/v3/emails',
-      'results'
-    );
+    const emails = await paginateHubSpot(token, 'https://api.hubapi.com/marketing/v3/emails', 'results');
     emailCount = emails.length;
     for (const email of emails) {
       const emailName = email.name || email.id || 'Unnamed Email';
-      for (const name of extractEmailProps(email)) {
-        emailProps.add(name);
-        addUsage(name, 'emails', emailName);
-      }
+      for (const name of extractEmailProps(email)) { emailProps.add(name); addUsage(name, 'emails', emailName); }
     }
-  } catch (err) {
-    warnings.push(`Marketing emails: ${err.response?.data?.message || err.message}`);
-  }
+  } catch (err) { warnings.push(`Marketing emails: ${err.response?.data?.message || err.message}`); }
 
-  // ── Reports (reporting v1 API) ──
-  let reportProps = new Set();
-  let reportCount = 0;
+  let reportProps = new Set(), reportCount = 0;
   try {
     const reportRes = await axios.get(
       'https://api.hubapi.com/reporting/v1/reports',
-      {
-        headers: { Authorization: `Bearer ${token}` },
-        params: { limit: 300 },
-      }
+      { headers: { Authorization: `Bearer ${token}` }, params: { limit: 300 } }
     );
     const reports = reportRes.data.objects || reportRes.data.results || [];
     reportCount = reports.length;
     for (const report of reports) {
       const reportName = report.name || report.id || 'Unnamed Report';
-      for (const name of extractReportProps(report)) {
-        reportProps.add(name);
-        addUsage(name, 'reports', reportName);
-      }
+      for (const name of extractReportProps(report)) { reportProps.add(name); addUsage(name, 'reports', reportName); }
     }
-  } catch (err) {
-    warnings.push(`Reports: ${err.response?.data?.message || err.message}`);
-  }
+  } catch (err) { warnings.push(`Reports: ${err.response?.data?.message || err.message}`); }
 
   res.json({
     success: true,
-    workflowProperties:  Array.from(workflowProps),
-    formProperties:      Array.from(formProps),
-    listProperties:      Array.from(listProps),
-    pipelineProperties:  Array.from(pipelineProps),
-    reportProperties:    Array.from(reportProps),
-    emailProperties:     Array.from(emailProps),
+    workflowProperties:   Array.from(workflowProps),
+    formProperties:       Array.from(formProps),
+    listProperties:       Array.from(listProps),
+    pipelineProperties:   Array.from(pipelineProps),
+    reportProperties:     Array.from(reportProps),
+    emailProperties:      Array.from(emailProps),
     propertyUsageDetails: usageDetails,
-    workflowCount,
-    formCount,
-    listCount,
-    pipelineCount,
-    reportCount,
-    emailCount,
+    workflowCount, formCount, listCount, pipelineCount, reportCount, emailCount,
     warnings,
   });
 });
 
 /**
  * POST /api/check-property-records
- * Body: { token, objectType, propertyName }
- * Uses the CRM search API to count how many records have this property set.
+ * Body: { objectType, propertyName }
  */
 app.post('/api/check-property-records', async (req, res) => {
-  const { token, objectType, propertyName } = req.body;
-  if (!token || !objectType || !propertyName) {
-    return res.status(400).json({ success: false, error: 'token, objectType, propertyName are required.' });
+  const { objectType, propertyName } = req.body;
+  if (!objectType || !propertyName) {
+    return res.status(400).json({ success: false, error: 'objectType and propertyName are required.' });
   }
   try {
+    const token = await getValidToken(req);
     const response = await axios.post(
       `https://api.hubapi.com/crm/v3/objects/${objectType}/search`,
       {
@@ -719,30 +676,30 @@ app.post('/api/check-property-records', async (req, res) => {
     );
     res.json({ success: true, total: response.data.total ?? 0 });
   } catch (err) {
-    const msg = err.response?.data?.message || err.message;
-    res.status(err.response?.status || 500).json({ success: false, error: msg });
+    const status = err.statusCode || err.response?.status || 500;
+    res.status(status).json({ success: false, error: err.response?.data?.message || err.message });
   }
 });
 
 /**
  * DELETE /api/delete-property
- * Body: { token, objectType, propertyName }
- * Permanently deletes a custom HubSpot property. System properties will fail.
+ * Body: { objectType, propertyName }
  */
 app.delete('/api/delete-property', async (req, res) => {
-  const { token, objectType, propertyName } = req.body;
-  if (!token || !objectType || !propertyName) {
-    return res.status(400).json({ success: false, error: 'token, objectType, propertyName are required.' });
+  const { objectType, propertyName } = req.body;
+  if (!objectType || !propertyName) {
+    return res.status(400).json({ success: false, error: 'objectType and propertyName are required.' });
   }
   try {
+    const token = await getValidToken(req);
     await axios.delete(
       `https://api.hubapi.com/crm/v3/properties/${objectType}/${propertyName}`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
     res.json({ success: true });
   } catch (err) {
-    const msg = err.response?.data?.message || err.message;
-    res.status(err.response?.status || 500).json({ success: false, error: msg });
+    const status = err.statusCode || err.response?.status || 500;
+    res.status(status).json({ success: false, error: err.response?.data?.message || err.message });
   }
 });
 
@@ -750,12 +707,13 @@ app.delete('/api/delete-property', async (req, res) => {
 
 // eslint-disable-next-line no-unused-vars
 app.use((err, _req, res, _next) => {
-  res.status(500).json({ success: false, errors: [err.message] });
+  const status = err.statusCode || 500;
+  res.status(status).json({ success: false, error: err.message });
 });
 
 // ── Start ──────────────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`HubSpot Bulk Property Creator running at http://localhost:${PORT}`);
+  console.log(`HubSpot Property Manager running at http://localhost:${PORT}`);
 });
