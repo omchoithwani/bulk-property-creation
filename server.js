@@ -79,16 +79,18 @@ const SCOPES = [
 
 // ── Middleware ──────────────────────────────────────────────────────────────
 
+app.set('trust proxy', 1); // Required for secure cookies behind Render/Heroku reverse proxies
+
 app.use(express.json());
 app.use(session({
   secret: process.env.SESSION_SECRET || 'hubspot-property-tool-secret',
   resave: false,
   saveUninitialized: false,
   cookie: {
-    // In production (HTTPS) cookies should be secure; locally they work without it
     secure: process.env.NODE_ENV === 'production',
     httpOnly: true,
-    maxAge: 8 * 60 * 60 * 1000, // 8 hours — matches HubSpot token lifetime
+    sameSite: 'lax', // Required: allows cookie to be sent after OAuth redirect from HubSpot
+    maxAge: 8 * 60 * 60 * 1000,
   },
 }));
 app.use(express.static('public'));
