@@ -31,7 +31,7 @@ const SCOPES = [
   'automation',
   'forms',
   'crm.lists.read',
-  'reports',
+  'business-intelligence',
   'content',
   'crm.schemas.custom.read',
 ].join(' ');
