@@ -3,10 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AeroRev | Bulk Property Creator</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600&family=Syne:wght@700;800&display=swap" rel="stylesheet" />
+  <title>HubSpot Property Manager</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -15,89 +12,101 @@
   <header class="app-header">
     <div class="header-inner">
       <div class="header-brand">
-        <svg width="38" height="38" viewBox="0 0 38 38" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <rect width="38" height="38" rx="8" fill="#C8F04A" fill-opacity="0.13" stroke="#C8F04A" stroke-opacity="0.2" stroke-width="1"/>
-          <path d="M8 10L16 19L8 28" stroke="#C8F04A" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="M20 10L28 19L20 28" stroke="#C8F04A" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+        <!-- HubSpot sprocket icon -->
+        <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="14" cy="14" r="14" fill="#FF7A59"/>
+          <path d="M9 8h2.5v5h7V8H21v12h-2.5v-5h-7v5H9V8Z" fill="white"/>
         </svg>
-        <div class="brand-info">
-          <div class="brand-wordmark"><span class="brand-aero">Aero</span><span class="brand-rev">Rev</span></div>
-          <div class="brand-subtitle">Bulk Property Creator</div>
-        </div>
-        <span class="hs-badge">HubSpot RevOps Partner</span>
+        <span class="brand-name">HubSpot Property Manager</span>
       </div>
+      <div class="header-auth-status" id="header-auth-status"></div>
     </div>
   </header>
 
   <!-- ── Main ───────────────────────────────────────────── -->
   <main class="app-main">
 
-    <!-- ── Shared: Configuration ─────────────────────────── -->
+    <!-- ── Step 1: Connection ────────────────────────────── -->
     <div class="card" id="card-config">
       <div class="card-header">
         <div class="step-label">
           <span class="step-dot">1</span>
           <div>
-            <h2>Configuration</h2>
-            <p>Connect your HubSpot account and choose an object type</p>
+            <h2>Connection</h2>
+            <p id="connection-subtitle">Connect your HubSpot account to get started</p>
           </div>
         </div>
       </div>
-      <div class="card-body">
-        <div class="form-grid">
-          <div class="form-group">
-            <label for="token">Private App Token <span class="req">*</span></label>
-            <div class="input-wrap">
-              <input
-                type="password"
-                id="token"
-                placeholder="pat-na1-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-                autocomplete="off"
-              />
-              <button class="eye-btn" onclick="toggleToken()" title="Show / hide token" aria-label="Toggle token visibility">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-              </button>
+      <div class="card-body" id="config-body">
+
+        <!-- Loading state -->
+        <div id="auth-loading" style="color: var(--text-muted); font-size: 14px;">
+          Checking connection…
+        </div>
+
+        <!-- Not connected -->
+        <div id="auth-connect" style="display:none" class="connect-box">
+          <p>Authorize this app with your HubSpot account. You'll be redirected to HubSpot to grant access, then brought back here.</p>
+          <a href="/oauth/authorize" class="btn btn-hs">
+            <svg width="16" height="16" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="14" cy="14" r="14" fill="white" fill-opacity="0.25"/>
+              <path d="M9 8h2.5v5h7V8H21v12h-2.5v-5h-7v5H9V8Z" fill="white"/>
+            </svg>
+            Connect with HubSpot
+          </a>
+          <div id="auth-error" class="error-box" style="display:none"></div>
+        </div>
+
+        <!-- Connected -->
+        <div id="auth-connected" style="display:none">
+          <div class="portal-strip">
+            <div class="portal-info">
+              <span class="conn-dot"></span>
+              <span>Connected to portal <strong id="portal-id">—</strong></span>
+              <span class="portal-sep">·</span>
+              <span id="hub-domain" style="color: var(--text-muted);">—</span>
             </div>
-            <p class="hint">
-              HubSpot → Settings → Integrations → Private Apps.<br/>
-              Scopes needed: <code>crm.schemas.*.write</code> · <code>automation</code> · <code>forms</code> · <code>crm.lists.read</code> · <code>reports</code> · <code>content</code> · <code>crm.schemas.custom.read</code> (for custom objects)
-            </p>
+            <button class="btn btn-outline btn-sm" onclick="disconnectHubSpot()">Disconnect</button>
           </div>
-          <div class="form-group">
-            <label for="objectType">Object Type <span class="req">*</span></label>
-            <select id="objectType" onchange="onObjectTypeChange()">
-              <option value="contacts">Contacts</option>
-              <option value="companies">Companies</option>
-              <option value="deals">Deals</option>
-              <option value="tickets">Tickets</option>
-              <option value="products">Products</option>
-              <option value="line_items">Line Items</option>
-              <option value="quotes">Quotes</option>
-              <option value="calls">Calls</option>
-              <option value="emails">Emails</option>
-              <option value="meetings">Meetings</option>
-              <option value="notes">Notes</option>
-              <option value="tasks">Tasks</option>
-              <option value="communications">Communications</option>
-              <option value="feedback_submissions">Feedback Submissions</option>
-              <option value="leads">Leads</option>
-            </select>
-            <div style="margin-top:6px;">
-              <label for="objectTypeManual" style="font-size:0.82em;color:#555;">
-                Object not in list? Enter its type ID or name manually:
-              </label>
-              <input id="objectTypeManual" type="text" placeholder="e.g. listing or 2-12345"
-                style="width:100%;margin-top:3px;padding:5px 8px;border:1px solid #ccc;border-radius:4px;font-size:0.9em;"
-                oninput="onObjectTypeChange()" />
+
+          <div class="form-grid" style="margin-top: 4px;">
+            <div class="form-group">
+              <label for="objectType">Object Type <span class="req">*</span></label>
+              <select id="objectType" onchange="onObjectTypeChange()">
+                <option value="contacts">Contacts</option>
+                <option value="companies">Companies</option>
+                <option value="deals">Deals</option>
+                <option value="tickets">Tickets</option>
+                <option value="products">Products</option>
+                <option value="line_items">Line Items</option>
+                <option value="quotes">Quotes</option>
+                <option value="calls">Calls</option>
+                <option value="emails">Emails</option>
+                <option value="meetings">Meetings</option>
+                <option value="notes">Notes</option>
+                <option value="tasks">Tasks</option>
+                <option value="communications">Communications</option>
+                <option value="feedback_submissions">Feedback Submissions</option>
+                <option value="leads">Leads</option>
+              </select>
+              <div style="margin-top:6px;">
+                <label for="objectTypeManual" style="font-size:0.82em;color:#555;">
+                  Object not in list? Enter its type ID or name manually:
+                </label>
+                <input id="objectTypeManual" type="text" placeholder="e.g. listing or 2-12345"
+                  style="width:100%;margin-top:3px;padding:5px 8px;border:1px solid var(--border);border-radius:var(--radius);font-size:0.9em;"
+                  oninput="onObjectTypeChange()" />
+              </div>
+              <p class="hint">Properties will be created or managed under this object type.</p>
             </div>
-            <p class="hint">Properties will be created or managed under this object type.</p>
           </div>
         </div>
+
       </div>
     </div>
 
-    <!-- ── Tab navigation ────────────────────────────────── -->
-    <div class="tab-nav">
+    <!-- ── Tab navigation (hidden until connected) ───────── -->
+    <div class="tab-nav" id="tab-nav" style="display:none">
       <button class="tab-btn active" id="tab-create" onclick="switchTab('create')">
         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         Create Properties
@@ -111,7 +120,7 @@
     <!-- ══════════════════════════════════════════════════════
          CREATE PANEL
     ══════════════════════════════════════════════════════ -->
-    <div id="panel-create">
+    <div id="panel-create" style="display:none">
 
       <!-- Step 2: Upload CSV -->
       <div class="card" id="card-upload">
@@ -130,7 +139,6 @@
         </div>
         <div class="card-body">
 
-          <!-- CSV format guide -->
           <div class="format-guide">
             <p class="format-title">CSV Columns</p>
             <div class="format-cols">
@@ -156,12 +164,11 @@
               <div class="format-col optional-col">
                 <span class="col-name">Options</span>
                 <span class="col-opt-tag">Optional</span>
-                <span class="col-desc">Semicolon-separated values — e.g. <em>Red;Green;Blue</em>. Only used for Dropdown, Radio, and Checkbox types.</span>
+                <span class="col-desc">Semicolon-separated values — e.g. <em>Red;Green;Blue</em>. Only for Dropdown, Radio, and Checkbox types.</span>
               </div>
             </div>
           </div>
 
-          <!-- Drop zone -->
           <div
             class="dropzone"
             id="dropzone"
@@ -178,10 +185,8 @@
           </div>
           <input type="file" id="fileInput" accept=".csv" style="display:none" onchange="handleFileSelect(event)" />
 
-          <!-- CSV errors -->
           <div id="csvErrors" class="error-box" style="display:none"></div>
 
-          <!-- Preview -->
           <div id="csvPreview" style="display:none">
             <div class="preview-header">
               <h3 id="previewCount"></h3>
@@ -191,11 +196,7 @@
               <table id="previewTable">
                 <thead>
                   <tr>
-                    <th>#</th>
-                    <th>Name</th>
-                    <th>Type</th>
-                    <th>Description</th>
-                    <th>Options</th>
+                    <th>#</th><th>Name</th><th>Type</th><th>Description</th><th>Options</th>
                   </tr>
                 </thead>
                 <tbody id="previewBody"></tbody>
@@ -209,13 +210,11 @@
       <!-- Step 3: Create -->
       <div class="card" id="card-create">
         <div class="card-body">
-
           <button class="btn btn-primary btn-lg" id="createBtn" onclick="createProperties()" disabled>
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             Create Properties in HubSpot
           </button>
 
-          <!-- Progress -->
           <div id="progressSection" style="display:none">
             <div class="progress-track">
               <div class="progress-fill" id="progressFill" style="width:0%"></div>
@@ -223,26 +222,19 @@
             <p class="progress-text" id="progressText">Starting…</p>
           </div>
 
-          <!-- Results -->
           <div id="resultsSection" style="display:none">
             <div class="results-summary" id="resultsSummary"></div>
             <div class="table-wrap">
               <table id="resultsTable">
                 <thead>
                   <tr>
-                    <th>#</th>
-                    <th>Name</th>
-                    <th>Type</th>
-                    <th>Internal Name</th>
-                    <th>Status</th>
-                    <th>Details</th>
+                    <th>#</th><th>Name</th><th>Type</th><th>Internal Name</th><th>Status</th><th>Details</th>
                   </tr>
                 </thead>
                 <tbody id="resultsBody"></tbody>
               </table>
             </div>
           </div>
-
         </div>
       </div>
 
@@ -254,7 +246,6 @@
     ══════════════════════════════════════════════════════ -->
     <div id="panel-manage" style="display:none">
 
-      <!-- Toolbar card -->
       <div class="card">
         <div class="card-header">
           <div class="step-label">
@@ -280,7 +271,6 @@
           </div>
         </div>
 
-        <!-- Analyze progress (hidden until analyzing) -->
         <div id="analyzeProgress" style="display:none" class="analyze-progress">
           <div class="progress-track">
             <div class="progress-fill" id="analyzeProgressFill" style="width:0%"></div>
@@ -288,10 +278,8 @@
           <p class="progress-text" id="analyzeProgressText">Starting analysis…</p>
         </div>
 
-        <!-- Analyze warnings -->
         <div id="analyzeWarnings" style="display:none" class="warn-box"></div>
 
-        <!-- Filter / search bar -->
         <div id="filterBar" style="display:none" class="filter-bar">
           <div class="search-wrap">
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -311,16 +299,11 @@
         </div>
       </div>
 
-      <!-- Bulk-action bar (shown when rows are selected) -->
       <div id="bulkBar" class="bulk-bar" style="display:none">
         <span id="bulkCount" class="bulk-count"></span>
         <div class="bulk-actions">
-          <button class="btn btn-outline btn-sm" onclick="selectUnused()">
-            Select Unused
-          </button>
-          <button class="btn btn-outline btn-sm" onclick="clearSelection()">
-            Clear Selection
-          </button>
+          <button class="btn btn-outline btn-sm" onclick="selectUnused()">Select Unused</button>
+          <button class="btn btn-outline btn-sm" onclick="clearSelection()">Clear Selection</button>
           <button class="btn btn-danger btn-sm" id="deleteSelectedBtn" onclick="deleteSelected()">
             <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
             Delete Selected
@@ -328,7 +311,6 @@
         </div>
       </div>
 
-      <!-- Properties table card -->
       <div class="card" id="propsTableCard" style="display:none">
         <div class="table-wrap">
           <table id="propsTable">
@@ -357,7 +339,6 @@
         </div>
       </div>
 
-      <!-- Empty state -->
       <div id="propsEmpty" class="empty-state" style="display:none">
         <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="empty-icon"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
         <p>No properties match your filters.</p>
