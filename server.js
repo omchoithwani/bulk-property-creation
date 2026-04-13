@@ -25,15 +25,53 @@ const CLIENT_SECRET = process.env.HUBSPOT_CLIENT_SECRET;
 const REDIRECT_URI  = process.env.HUBSPOT_REDIRECT_URI || 'http://localhost:3000/oauth/callback';
 
 const SCOPES = [
-  'crm.schemas.read',
-  'crm.schemas.write',
-  'crm.objects.contacts.read',
-  'automation',
-  'forms',
-  'crm.lists.read',
-  'business-intelligence',
-  'content',
+  // Schema read — needed to list/read properties on each object type
+  'crm.schemas.contacts.read',
+  'crm.schemas.companies.read',
+  'crm.schemas.deals.read',
+  'crm.schemas.line_items.read',
+  'crm.schemas.quotes.read',
+  'crm.schemas.listings.read',
+  'crm.schemas.appointments.read',
+  'crm.schemas.services.read',
+  'crm.schemas.orders.read',
+  'crm.schemas.courses.read',
+  'crm.schemas.subscriptions.read',
+  'crm.schemas.invoices.read',
+  'crm.schemas.carts.read',
+  'crm.schemas.projects.read',
   'crm.schemas.custom.read',
+  // Schema write — needed to create/delete properties
+  'crm.schemas.contacts.write',
+  'crm.schemas.companies.write',
+  'crm.schemas.deals.write',
+  'crm.schemas.line_items.write',
+  'crm.schemas.quotes.write',
+  'crm.schemas.listings.write',
+  'crm.schemas.appointments.write',
+  'crm.schemas.services.write',
+  'crm.schemas.orders.write',
+  'crm.schemas.courses.write',
+  'crm.schemas.subscriptions.write',
+  'crm.schemas.invoices.write',
+  'crm.schemas.carts.write',
+  'crm.schemas.projects.write',
+  // Object read — needed for record-count search API
+  'crm.objects.contacts.read',
+  'crm.objects.companies.read',
+  'crm.objects.deals.read',
+  'crm.objects.custom.read',
+  'crm.objects.leads.read',
+  'crm.objects.listings.read',
+  'crm.objects.appointments.read',
+  'crm.objects.services.read',
+  // Usage analysis
+  'automation',           // workflows
+  'forms',                // forms
+  'crm.lists.read',       // lists
+  'content',              // marketing emails
+  'business-intelligence', // reports
+  'tickets',              // tickets object properties
 ].join(' ');
 
 // ── Middleware ──────────────────────────────────────────────────────────────
